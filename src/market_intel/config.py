@@ -1,0 +1,329 @@
+"""Typed settings for market-intel, loaded from environment variables and a .env file.
+
+Loading order (highest priority first):
+    1. Real environment variables.
+    2. The .env file: ``MARKET_INTEL_ENV_FILE`` if set, otherwise ``.env`` at the repo root
+       (found from this file's location, not the current directory).
+    3. Defaults in this module.
+
+Empty values (``KEY=``) count as "not set", so a copy of ``.env.example`` loads cleanly.
+
+Settings are split into groups (database, upstox, llm, alerts). A group is only checked when
+the code that needs it calls :meth:`Settings.require`, so the app starts with just
+``APP_PROFILE`` set.
+
+Secret values are ``SecretStr`` and never appear in repr, dumps or error messages.
+
+Run ``uv run python -m market_intel.config`` to print the settings with secrets masked.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal, overload
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE_VAR = "MARKET_INTEL_ENV_FILE"
+DECISION_DATE = "2026-11-12"
+
+LLM_DEFAULT_CAP_INR = 1000
+LLM_ABSOLUTE_MAX_INR = 2000
+
+Profile = Literal["thinkpad", "hp", "cloud"]
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+GroupName = Literal["database", "upstox", "llm", "alerts"]
+
+
+class ConfigError(Exception):
+    """Invalid or incomplete configuration. The message never contains secret values."""
+
+
+# --- Group views -------------------------------------------------------------------------
+
+
+class _Group(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+class DatabaseSettings(_Group):
+    postgres_url: SecretStr
+    mongodb_uri: SecretStr
+
+
+class UpstoxSettings(_Group):
+    upstox_api_key: SecretStr
+    upstox_api_secret: SecretStr
+    upstox_redirect_uri: str
+
+
+class LLMSettings(_Group):
+    gemini_api_key: SecretStr
+    groq_api_key: SecretStr | None
+    paid_llm_api_key: SecretStr | None
+    llm_monthly_cap_inr: int
+    llm_warn_pct: int
+
+
+class AlertSettings(_Group):
+    alert_email_from: str
+    alert_email_to: str
+    alert_email_app_password: SecretStr
+
+
+# Each group: (view model, fields that must be set, optional fields).
+_GROUPS: dict[str, tuple[type[_Group], tuple[str, ...], tuple[str, ...]]] = {
+    "database": (DatabaseSettings, ("postgres_url", "mongodb_uri"), ()),
+    "upstox": (
+        UpstoxSettings,
+        ("upstox_api_key", "upstox_api_secret", "upstox_redirect_uri"),
+        (),
+    ),
+    "llm": (
+        LLMSettings,
+        ("gemini_api_key",),
+        ("groq_api_key", "paid_llm_api_key", "llm_monthly_cap_inr", "llm_warn_pct"),
+    ),
+    "alerts": (
+        AlertSettings,
+        ("alert_email_from", "alert_email_to", "alert_email_app_password"),
+        (),
+    ),
+}
+
+
+# --- Settings ----------------------------------------------------------------------------
+
+
+class Settings(BaseSettings):
+    """All settings. Field names map to upper-case env vars (``app_profile`` -> APP_PROFILE).
+
+    Times are always stored in UTC; ``display_timezone`` is only used when showing them.
+    """
+
+    model_config = SettingsConfigDict(
+        env_ignore_empty=True,
+        extra="ignore",
+        hide_input_in_errors=True,
+        frozen=True,
+    )
+
+    app_profile: Profile
+    log_level: LogLevel = "INFO"
+    display_timezone: str = "Asia/Kolkata"
+    data_dir: Path = Path("data")
+    log_dir: Path = Path("logs")
+
+    # database
+    postgres_url: SecretStr | None = None
+    mongodb_uri: SecretStr | None = None
+    # upstox
+    upstox_api_key: SecretStr | None = None
+    upstox_api_secret: SecretStr | None = None
+    upstox_redirect_uri: str | None = None
+    # llm
+    gemini_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
+    paid_llm_api_key: SecretStr | None = None
+    llm_monthly_cap_inr: int = LLM_DEFAULT_CAP_INR
+    llm_warn_pct: int = 80
+    llm_cap_raise_approved: bool = False
+    # alerts
+    alert_email_from: str | None = None
+    alert_email_to: str | None = None
+    alert_email_app_password: SecretStr | None = None
+    alert_smtp_host: str = "smtp.gmail.com"
+    alert_smtp_port: int = Field(default=587, ge=1, le=65535)  # 587 STARTTLS, 465 SSL
+    alert_throttle_hours: float = Field(default=6, ge=0)
+    alert_dry_run: bool = False
+
+    @field_validator("display_timezone")
+    @classmethod
+    def _valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)  # tzdata supplies the zone database on Windows
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(
+                f"unknown time zone {value!r}; use an IANA name like Asia/Kolkata"
+            ) from None
+        return value
+
+    @model_validator(mode="after")
+    def _resolve_and_check(self) -> Settings:
+        for name in ("data_dir", "log_dir"):
+            path: Path = getattr(self, name)
+            if not path.is_absolute():
+                # frozen model: bypass the setattr guard for these derived values
+                object.__setattr__(self, name, (REPO_ROOT / path).resolve())
+        # ConfigError is not a ValueError, so pydantic lets it through unwrapped.
+        _check_rules(self)
+        return self
+
+    def missing(self, group: GroupName) -> list[str]:
+        """Env var names of the required settings in ``group`` that are not set."""
+        _, required, _ = _group_spec(group)
+        return [name.upper() for name in required if getattr(self, name) is None]
+
+    @overload
+    def require(self, group: Literal["database"]) -> DatabaseSettings: ...
+    @overload
+    def require(self, group: Literal["upstox"]) -> UpstoxSettings: ...
+    @overload
+    def require(self, group: Literal["llm"]) -> LLMSettings: ...
+    @overload
+    def require(self, group: Literal["alerts"]) -> AlertSettings: ...
+
+    def require(self, group: GroupName) -> _Group:
+        """Return the typed settings for ``group``, or raise ConfigError naming what's missing.
+
+        Call this where a part of the system starts, e.g. ``settings.require("database")``.
+        """
+        view, required, optional = _group_spec(group)
+        missing = self.missing(group)
+        if missing:
+            raise ConfigError(
+                f"Settings group '{group}' is incomplete. Missing: {', '.join(missing)}. "
+                "Set them in your .env (see .env.example for the names)."
+            )
+        return view(**{name: getattr(self, name) for name in required + optional})
+
+
+def _group_spec(group: str) -> tuple[type[_Group], tuple[str, ...], tuple[str, ...]]:
+    if group not in _GROUPS:
+        raise ConfigError(f"Unknown settings group '{group}'. Allowed: {', '.join(_GROUPS)}")
+    return _GROUPS[group]
+
+
+def _check_rules(s: Settings) -> None:
+    """Decisions from docs/decisions.md enforced at load time."""
+    if s.app_profile == "thinkpad" and (s.upstox_api_key or s.upstox_api_secret):
+        raise ConfigError(
+            "Rule R1: Upstox keys are not allowed on the ThinkPad profile "
+            f"(decision {DECISION_DATE}). Remove UPSTOX_API_KEY / UPSTOX_API_SECRET."
+        )
+
+    cap = s.llm_monthly_cap_inr
+    if cap <= 0:
+        raise ConfigError(f"Rule R2: LLM_MONTHLY_CAP_INR must be > 0 (decision {DECISION_DATE}).")
+    if cap > LLM_ABSOLUTE_MAX_INR:
+        raise ConfigError(
+            f"Rule R2: LLM_MONTHLY_CAP_INR={cap} is above the absolute maximum of "
+            f"Rs {LLM_ABSOLUTE_MAX_INR} (decision {DECISION_DATE})."
+        )
+    if cap > LLM_DEFAULT_CAP_INR and not s.llm_cap_raise_approved:
+        raise ConfigError(
+            f"Rule R2: LLM_MONTHLY_CAP_INR={cap} is above Rs {LLM_DEFAULT_CAP_INR} and needs "
+            f"LLM_CAP_RAISE_APPROVED=true, after an approval logged in docs/decisions.md "
+            f"(decision {DECISION_DATE})."
+        )
+
+    if not 1 <= s.llm_warn_pct <= 99:
+        raise ConfigError(
+            f"Rule R3: LLM_WARN_PCT must be between 1 and 99, got {s.llm_warn_pct} "
+            f"(decision {DECISION_DATE})."
+        )
+
+
+# --- Loading -----------------------------------------------------------------------------
+
+
+def env_file_path() -> Path:
+    """The .env file to read: MARKET_INTEL_ENV_FILE if set, else ``<repo root>/.env``."""
+    override = os.environ.get(ENV_FILE_VAR)
+    if override:
+        path = Path(override)
+        if not path.is_file():
+            raise ConfigError(f"{ENV_FILE_VAR} points to a file that does not exist: {path}")
+        return path
+    return REPO_ROOT / ".env"
+
+
+def load_settings() -> Settings:
+    """Load and validate settings (uncached). Raises ConfigError on any problem."""
+    env_file = env_file_path()
+    try:
+        return Settings(_env_file=env_file if env_file.is_file() else None)
+    except ValidationError as exc:
+        raise ConfigError(_describe(exc)) from None
+
+
+def _describe(exc: ValidationError) -> str:
+    # Only the field name and pydantic's message; never the input value.
+    lines = [f"{'.'.join(str(p) for p in e['loc']).upper()}: {e['msg']}" for e in exc.errors()]
+    return "Invalid settings:\n  " + "\n  ".join(lines)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Cached settings for the app. In tests, call ``get_settings.cache_clear()`` to reload."""
+    return load_settings()
+
+
+# --- Command -----------------------------------------------------------------------------
+
+
+_SECRET_TYPES = (SecretStr, SecretStr | None)
+_EMAIL_FIELDS = ("alert_email_from", "alert_email_to")
+
+
+def mask_email(address: str | None) -> str:
+    """'mike@example.com' -> 'm***@example.com'. Output gets pasted into chats/screenshots."""
+    if not address:
+        return "(not set)"
+    local, sep, domain = address.strip().rpartition("@")
+    if not sep or not local:
+        return "***"
+    return f"{local[0]}***@{domain}"
+
+
+def _plain_fields() -> list[str]:
+    return [n for n, f in Settings.model_fields.items() if f.annotation not in _SECRET_TYPES]
+
+
+def render(s: Settings) -> str:
+    """Human-readable settings report. Secrets show only 'set' / 'not set'."""
+    out = [f"profile: {s.app_profile}", ""]
+    for name in _plain_fields():
+        if name == "app_profile":
+            continue
+        value = getattr(s, name)
+        if name in _EMAIL_FIELDS and value is not None:
+            value = mask_email(value)
+        out.append(f"  {name.upper()} = {'(default/unset)' if value is None else value}")
+    for group, (_, required, optional) in _GROUPS.items():
+        missing = s.missing(group)  # type: ignore[arg-type]
+        status = "complete" if not missing else "missing " + ", ".join(missing)
+        out += ["", f"[{group}] {status}"]
+        for name in required + optional:
+            if Settings.model_fields[name].annotation in _SECRET_TYPES:
+                out.append(f"  {name.upper()}: {'set' if getattr(s, name) else 'not set'}")
+    return "\n".join(out)
+
+
+def main() -> int:
+    """Entry point for ``python -m market_intel.config``. Returns the exit code."""
+    try:
+        settings = load_settings()
+    except ConfigError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return 1
+    print(render(settings))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

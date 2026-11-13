@@ -1,0 +1,19 @@
+# Normalise text to LF so Windows and the Linux CI agree on line endings
+* text=auto eol=lf
+
+# Binary files - never convert
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.xlsx binary
+*.docx binary
+*.parquet binary
+*.pkl binary
+*.pt binary
+*.onnx binary

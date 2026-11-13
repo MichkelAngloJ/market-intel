@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # setup-uv publishes no floating major tag after v7, so pin the exact release.
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Pre-commit (lint, format, secret scan)
+        run: uv run pre-commit run --all-files
+      - name: Tests
+        run: uv run pytest

@@ -1,0 +1,49 @@
+# Secrets (rule 1) - never commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Test / notebook artefacts
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Local data, models, experiment runs (too big / regenerable)
+data/
+models/
+mlruns/
+logs/
+*.parquet
+*.pkl
+*.pt
+
+# Database dumps / exports
+*.dump
+*.sql.gz
+*.bson
+*.archive
+
+# Docker volumes
+pgdata/
+mongodata/
+
+# Local-only folder for exports and backups - not in git
+drive_sync/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
