@@ -1,0 +1,71 @@
+name: Compose smoke
+
+# A separate workflow because GitHub's path filter applies to a whole workflow; this keeps
+# the main CI running on every push while this job runs only on database-related changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker/**"
+      - "src/market_intel/db/**"
+      - "src/market_intel/db_check.py"
+      - ".github/workflows/compose-smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docker/**"
+      - "src/market_intel/db/**"
+      - "src/market_intel/db_check.py"
+      - ".github/workflows/compose-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compose-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # setup-uv publishes no floating major tag after v7, so pin the exact release.
+      - uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Generate throwaway credentials
+        # Random per run, masked in logs, never committed. Hex is URL-safe.
+        run: |
+          umask 077
+          pg_pw=$(openssl rand -hex 24)
+          root_pw=$(openssl rand -hex 24)
+          app_pw=$(openssl rand -hex 24)
+          echo "::add-mask::$pg_pw"
+          echo "::add-mask::$root_pw"
+          echo "::add-mask::$app_pw"
+          {
+            echo "POSTGRES_USER=market_intel"
+            echo "POSTGRES_PASSWORD=$pg_pw"
+            echo "POSTGRES_DB=market_intel"
+            echo "MONGO_INITDB_ROOT_USERNAME=root"
+            echo "MONGO_INITDB_ROOT_PASSWORD=$root_pw"
+            echo "MONGO_APP_USER=market_intel_app"
+            echo "MONGO_APP_PASSWORD=$app_pw"
+          } > docker/compose.env
+          {
+            echo "APP_PROFILE=hp"
+            echo "ALERT_DRY_RUN=true"
+            echo "POSTGRES_URL=postgresql://market_intel:$pg_pw@127.0.0.1:5432/market_intel"
+            echo "MONGODB_URI=mongodb://market_intel_app:$app_pw@127.0.0.1:27017/market_intel?authSource=market_intel"
+          } > .env
+
+      - name: Start databases
+        run: |
+          docker compose -f docker/compose.yaml --env-file docker/compose.env up -d --wait --wait-timeout 180
+          docker compose -f docker/compose.yaml --env-file docker/compose.env ps
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Database check
+        run: uv run python -m market_intel.db_check
+
+      - name: Stop databases
+        if: always()
+        run: docker compose -f docker/compose.yaml --env-file docker/compose.env down -v
