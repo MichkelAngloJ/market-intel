@@ -63,6 +63,10 @@ class _Group(BaseModel):
 class DatabaseSettings(_Group):
     postgres_url: SecretStr
     mongodb_uri: SecretStr
+    mongodb_db: str
+    db_connect_timeout_s: int
+    pg_storage_limit_mb: int
+    mongo_storage_limit_mb: int
 
 
 class UpstoxSettings(_Group):
@@ -87,7 +91,11 @@ class AlertSettings(_Group):
 
 # Each group: (view model, fields that must be set, optional fields).
 _GROUPS: dict[str, tuple[type[_Group], tuple[str, ...], tuple[str, ...]]] = {
-    "database": (DatabaseSettings, ("postgres_url", "mongodb_uri"), ()),
+    "database": (
+        DatabaseSettings,
+        ("postgres_url", "mongodb_uri"),
+        ("mongodb_db", "db_connect_timeout_s", "pg_storage_limit_mb", "mongo_storage_limit_mb"),
+    ),
     "upstox": (
         UpstoxSettings,
         ("upstox_api_key", "upstox_api_secret", "upstox_redirect_uri"),
@@ -131,6 +139,10 @@ class Settings(BaseSettings):
     # database
     postgres_url: SecretStr | None = None
     mongodb_uri: SecretStr | None = None
+    mongodb_db: str = "market_intel"
+    db_connect_timeout_s: int = Field(default=15, ge=1)
+    pg_storage_limit_mb: int = Field(default=1024, ge=1)  # Neon free plan
+    mongo_storage_limit_mb: int = Field(default=512, ge=1)  # Atlas M0
     # upstox
     upstox_api_key: SecretStr | None = None
     upstox_api_secret: SecretStr | None = None
