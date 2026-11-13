@@ -36,3 +36,21 @@ def test_no_env_file_is_tracked() -> None:
     names = [Path(p).name for p in result.stdout.splitlines()]
     bad = [n for n in names if (n == ".env" or n.startswith(".env.")) and n != ".env.example"]
     assert not bad, f"env files tracked in git: {bad}"
+
+
+def test_compose_env_is_ignored() -> None:
+    result = _git("check-ignore", "docker/compose.env")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "docker/compose.env"
+
+
+def test_compose_env_example_values_are_empty() -> None:
+    path = REPO_ROOT / "docker" / "compose.env.example"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    pairs = [line for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    assert pairs, "compose.env.example has no variables"
+    for line in pairs:
+        assert "=" in line, f"not a KEY=VALUE line: {line!r}"
+        key, value = line.split("=", 1)
+        assert key.strip(), f"empty key in: {line!r}"
+        assert value.strip() == "", f"{key.strip()} must have an empty value"
