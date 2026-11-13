@@ -1,0 +1,93 @@
+"""Shared pieces for the database checks: the report type, URL parsing and redaction.
+
+Only hosts may be shown. Users, passwords and full URLs never leave this module unredacted.
+"""
+
+from __future__ import annotations
+
+import statistics
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from urllib.parse import unquote
+
+MASK = "***"
+STORAGE_WARN_PCT = 80
+PINGS = 3
+
+
+@dataclass
+class DbReport:
+    """Result of checking one database. Safe to print: contains no credentials."""
+
+    name: str
+    host: str
+    reachable: bool = False
+    version: str | None = None
+    latency_ms: float | None = None
+    tls: bool | None = None
+    used_mb: float | None = None
+    limit_mb: int | None = None
+    write_ok: bool | None = None
+    error: str | None = None
+
+    @property
+    def used_pct(self) -> float | None:
+        if self.used_mb is None or not self.limit_mb:
+            return None
+        return 100 * self.used_mb / self.limit_mb
+
+    @property
+    def ok(self) -> bool:
+        return self.reachable and bool(self.write_ok) and self.error is None
+
+    @property
+    def storage_warning(self) -> bool:
+        return self.used_pct is not None and self.used_pct >= STORAGE_WARN_PCT
+
+
+@dataclass(frozen=True)
+class UrlParts:
+    """Pieces of a connection URL. ``user``/``password`` exist only to be redacted."""
+
+    hosts: str
+    user: str
+    password: str
+
+
+def parse_url(url: str) -> UrlParts:
+    """Split a connection URL into hosts, user and password. No network lookup (no SRV/DNS)."""
+    rest = url.split("://", 1)[-1]
+    netloc = rest.split("/", 1)[0].split("?", 1)[0]
+    userinfo, _, hostlist = netloc.rpartition("@")
+    user, _, password = userinfo.partition(":")
+    hosts = ",".join(h.rsplit(":", 1)[0] if h.count(":") == 1 else h for h in hostlist.split(","))
+    return UrlParts(hosts=hosts or "(unknown)", user=user, password=password)
+
+
+def redactor(url: str) -> Callable[[str], str]:
+    """Return a function that removes the URL, user and password from any text."""
+    parts = parse_url(url)
+    secrets = {url, parts.user, parts.password, unquote(parts.user), unquote(parts.password)}
+    ordered = sorted((s for s in secrets if s), key=len, reverse=True)
+
+    def redact(text: str) -> str:
+        for secret in ordered:
+            text = text.replace(secret, MASK)
+        return text
+
+    return redact
+
+
+def median_latency_ms(ping: Callable[[], object], clock: Callable[[], float]) -> float:
+    """Median round-trip time of ``PINGS`` calls, in milliseconds."""
+    times = []
+    for _ in range(PINGS):
+        start = clock()
+        ping()
+        times.append((clock() - start) * 1000)
+    return round(statistics.median(times), 1)
+
+
+def default_clock() -> float:
+    return time.perf_counter()
