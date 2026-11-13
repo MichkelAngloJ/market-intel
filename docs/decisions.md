@@ -124,3 +124,23 @@
 - Decision: The repo is public and source-available under the PolyForm Strict License 1.0.0 (noncommercial use only; no changes or redistribution). It replaces the private repo with one fresh commit, so earlier history (with machine details) is never public. The old private repo is kept as market-intel-private.
 - Concern (planner): Public code can be read and copied regardless of the license; strategy details, decisions and future model logic are visible. Secrets stay in .env and are blocked by detect-secrets. Not an OSI open-source license.
 - Reason (owner): Owner wants the project public while limiting reuse.
+
+## 2026-11-13 - Testing-phase Postgres: Neon free plan
+- Decision: Neon free plan, Postgres 18, AWS Singapore, Neon's default database "neondb", direct connection with TLS. The HP's local database will be named market_intel; the connection URL carries the name, so code doesn't care.
+- Concern (planner): Singapore adds latency; compute sleeps after 5 minutes (first query ~1 s slower); the free plan accepts connections from any IP, so protection is the generated password plus TLS; 1 GB fits testing only. An unused pooled connection string is also kept in .env, which is one more copy of the password.
+- Reason (owner): Twice Supabase's storage, no weekly pause (Supabase) or power-off (Aiven), TimescaleDB available for task 0.5. Default database name and pooled string kept for simplicity. Limits checked 2026-11-13.
+
+## 2026-11-13 - Testing-phase MongoDB: Atlas M0 in Mumbai
+- Decision: Atlas M0 in a separate project "market-intel", region Mumbai (ap-south-1), MongoDB 8.0. The Atlas-created database user (names can't be changed) restricted to readWrite on market_intel only. Network access limited to my current IP.
+- Concern (planner): About 512 MB and 100 operations/second. If my IP changes, access must be updated; opening it to all IPs needs a long random password and a new decision entry.
+- Reason (owner): Existing account; free; Mumbai is closest.
+
+## 2026-11-13 - Database drivers and connection check
+- Decision: psycopg 3 and PyMongo (Motor retired). db_check reports host, version, latency, client-side TLS, storage vs free limit (warning at 80%) and a write test, and sends a critical alert on failure.
+- Concern (planner): Neon's server-side TLS view (pg_stat_ssl) reads false because its proxy handles encryption, so TLS is checked on the client side.
+- Reason (owner): Accepted the planner's recommendation.
+
+## 2026-11-13 - Docker Compose for the HP, tested in CI
+- Decision: docker/compose.yaml with postgres 18 and mongo 8.0 (same as the cloud), ports on 127.0.0.1 only, memory limits, health checks, multi-arch images. Credentials in the git-ignored docker/compose.env. Least-privilege app user. A CI job starts the stack and runs db_check whenever database files change.
+- Concern (planner): Uses CI minutes on a private repo, so the job runs only on relevant changes. The TimescaleDB image decision is left to task 0.5.
+- Reason (owner): Verify the HP setup now, without Docker on the ThinkPad.

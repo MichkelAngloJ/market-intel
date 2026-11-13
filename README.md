@@ -61,6 +61,24 @@ Get-Content logs/market_intel.jsonl | ConvertFrom-Json | Where-Object level -eq 
 - **Dry-run:** set `ALERT_DRY_RUN=true` to build emails without sending, e.g. while developing.
 - A failed send is retried once after 5 s, then logged as an error. It never crashes the caller.
 
+## Databases
+
+**Testing phase (ThinkPad):** free cloud databases, Postgres on Neon (Postgres 18) and MongoDB on Atlas M0 (MongoDB 8.0). Put `POSTGRES_URL` and `MONGODB_URI` in `.env`.
+
+Check both connections:
+```
+uv run python -m market_intel.db_check
+```
+For each database it shows reachable, host (never user, password or URL), server version, latency (median of 3 pings), TLS (checked client-side), storage vs the free limit, and a write test that leaves nothing behind. Exit code 0 when all is well, 1 otherwise. A failure sends a critical alert; storage at 80% or more sends a warning.
+
+Free-tier limits (checked 2026-11-13): Neon 1 GB storage, compute sleeps after 5 minutes idle; Atlas M0 512 MB storage, about 100 operations/second. Set `PG_STORAGE_LIMIT_MB` / `MONGO_STORAGE_LIMIT_MB` if they change.
+
+**HP (from Dec 2026):** the same versions in Docker. Copy `docker/compose.env.example` to `docker/compose.env`, fill in long random values, then:
+```
+docker compose -f docker/compose.yaml --env-file docker/compose.env up -d
+```
+Ports listen on 127.0.0.1 only. The Mongo app user gets readWrite on `market_intel` only. CI starts this stack and runs `db_check` against it whenever database files change.
+
 ## Lint and tests
 
 ```
