@@ -1,9 +1,12 @@
-"""Shared test guards: no real email, no real .env, clean logging between tests."""
+"""Shared test guards: no real email or database, no real .env, clean logging."""
 
 import smtplib
 from collections.abc import Iterator
 from pathlib import Path
 
+import psycopg
+import pymongo
+import pymongo.mongo_client
 import pytest
 import structlog
 
@@ -29,6 +32,26 @@ def no_real_smtp(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(smtplib, "SMTP_SSL", Blocked)
     yield
     assert not attempts, "real SMTP connection attempted"
+
+
+@pytest.fixture(autouse=True)
+def no_real_databases(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Any real psycopg or MongoClient connection fails the test. Tests patch in fakes."""
+    attempts: list[str] = []
+
+    def blocked(kind: str):
+        def fail(*args: object, **kwargs: object) -> None:
+            attempts.append(kind)
+            pytest.fail(f"a test tried to open a real {kind} connection")
+
+        return fail
+
+    monkeypatch.setattr(psycopg, "connect", blocked("psycopg"))
+    monkeypatch.setattr(psycopg.Connection, "connect", classmethod(blocked("psycopg")))
+    monkeypatch.setattr(pymongo, "MongoClient", blocked("MongoClient"))
+    monkeypatch.setattr(pymongo.mongo_client, "MongoClient", blocked("MongoClient"))
+    yield
+    assert not attempts, f"real database connection attempted: {attempts}"
 
 
 @pytest.fixture(autouse=True)
