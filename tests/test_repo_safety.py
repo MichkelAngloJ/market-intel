@@ -1,5 +1,6 @@
 """Repo safety: secrets stay out of git."""
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -131,3 +132,27 @@ def test_no_tracked_notebook_has_outputs() -> None:
         if any(cell.get("outputs") for cell in notebook.get("cells", [])):
             bad.append(p)
     assert not bad, f"notebooks with outputs are tracked (run nbstripout): {bad}"
+
+
+# --- public repo: no device names or machine details ------------------------------------------
+
+# Built from pieces so this file doesn't match its own pattern.
+DEVICE_WORDS = re.compile(
+    "|".join(["think" + "pad", "len" + "ovo", "vic" + "tus", r"\bh" + r"p\b"]), re.IGNORECASE
+)
+
+
+def test_no_device_names_in_tracked_files() -> None:
+    bad = []
+    for name in _tracked():
+        path = REPO_ROOT / name
+        if name == "uv.lock" or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue  # binary file
+        for number, line in enumerate(text.splitlines(), start=1):
+            if DEVICE_WORDS.search(line):
+                bad.append(f"{name}:{number}")
+    assert not bad, f"device names in tracked files (use profile names instead): {bad}"
