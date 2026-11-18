@@ -40,9 +40,11 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?set in docker/compose.env}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?set in docker/compose.env}
-      # Read by mongo-init/01-app-user.js to create the least-privilege app user.
+      # Read by mongo-init/01-app-user.js to create the app and setup users.
       MONGO_APP_USER: ${MONGO_APP_USER:?set MONGO_APP_USER in docker/compose.env}
       MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in docker/compose.env}
+      MONGO_SETUP_USER: ${MONGO_SETUP_USER:?set MONGO_SETUP_USER in docker/compose.env}
+      MONGO_SETUP_PASSWORD: ${MONGO_SETUP_PASSWORD:?set MONGO_SETUP_PASSWORD in docker/compose.env}
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
