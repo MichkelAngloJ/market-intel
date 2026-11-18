@@ -17,24 +17,21 @@ function required(name) {
 
 const admin = db.getSiblingDB("admin");
 
-// Same actions as the Atlas custom role mi_app_rw.
+// Same rights as the Atlas custom role mi_app_rw, granted PER NAMED COLLECTION. A
+// database-wide "insert" would also let the app create any collection (MongoDB's insert
+// right includes the create command), so no collection-level right is database-wide.
+const RW = ["find", "insert", "update", "remove", "listIndexes", "collStats"];
+const on = (collection, actions) => ({ resource: { db: DB, collection }, actions });
+
 admin.createRole({
   role: "mi_app_rw",
   privileges: [
-    {
-      resource: { db: DB, collection: "" },
-      actions: [
-        "find",
-        "insert",
-        "update",
-        "remove",
-        "listIndexes",
-        "collStats",
-        "killAnyCursor",
-        "listCollections",
-        "dbStats",
-      ],
-    },
+    on("news_items", [...RW, "killAnyCursor"]),
+    on("llm_extractions", RW),
+    on("_healthcheck", ["find", "insert", "remove", "listIndexes", "collStats"]),
+    // Append-only audits: no remove (updates are needed to add the outcome once).
+    on("prediction_audit", ["find", "insert", "update", "listIndexes", "collStats"]),
+    on("", ["listCollections", "dbStats", "killAnyCursor"]), // database-wide, no data rights
   ],
   roles: [],
 });
