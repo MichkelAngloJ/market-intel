@@ -186,7 +186,7 @@ class FakeSender:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     values = {
-        "APP_PROFILE": "hp",
+        "APP_PROFILE": "full",
         "LOG_DIR": str(tmp_path / "logs"),
         "DATA_DIR": str(tmp_path / "data"),
         "POSTGRES_URL": PG_URL,

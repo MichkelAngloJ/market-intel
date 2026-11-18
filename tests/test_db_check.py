@@ -30,7 +30,7 @@ def make_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, alerts: bool = True, **env: str
 ) -> Settings:
     base = {
-        "APP_PROFILE": "hp",
+        "APP_PROFILE": "full",
         "DATA_DIR": str(tmp_path / "data"),
         "LOG_DIR": str(tmp_path / "logs"),
         "POSTGRES_URL": PG_URL,
@@ -294,7 +294,7 @@ def test_alerts_not_configured_does_not_crash(tmp_path, monkeypatch, capsys):
 
 
 def test_missing_database_config_is_clear_error(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     with pytest.raises(ConfigError, match="POSTGRES_URL, MONGODB_URI"):
         db_check.run(load_settings())

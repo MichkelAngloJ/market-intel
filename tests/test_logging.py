@@ -27,7 +27,7 @@ FAKE_LOADED = "fake-loaded-gemini-456"
 def setup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env: str
 ) -> tuple[Settings, io.StringIO]:
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     for key, value in env.items():
         monkeypatch.setenv(key, value)

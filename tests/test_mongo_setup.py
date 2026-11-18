@@ -109,13 +109,13 @@ def test_same_keys_under_another_name_is_a_conflict(capsys):
 
 
 def test_main_needs_the_setup_login(monkeypatch, capsys):
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     assert mongo_setup.main() == 1
     assert "MONGODB_ADMIN_URI" in capsys.readouterr().err
 
 
 def test_main_refuses_unencrypted_non_local_without_connecting(monkeypatch, capsys):
-    monkeypatch.setenv("APP_PROFILE", "thinkpad")
+    monkeypatch.setenv("APP_PROFILE", "restricted")
     monkeypatch.setenv("MONGODB_ADMIN_URI", f"mongodb://setup:{FAKE_PW}@db.example.com/?tls=false")
     monkeypatch.setattr(pymongo, "MongoClient", lambda *a, **k: pytest.fail("connected"))
     assert mongo_setup.main() == 1

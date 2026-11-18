@@ -69,13 +69,13 @@ def test_every_constraint_and_index_is_named():
 
 
 def test_env_refuses_missing_admin_url(monkeypatch):
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     with pytest.raises(SystemExit, match="POSTGRES_ADMIN_URL"):
         command.current(alembic_config())
 
 
 def test_env_refuses_unencrypted_non_local_admin_url(monkeypatch, capsys):
-    monkeypatch.setenv("APP_PROFILE", "thinkpad")
+    monkeypatch.setenv("APP_PROFILE", "restricted")
     monkeypatch.setenv(
         "POSTGRES_ADMIN_URL", f"postgresql://owner:{FAKE_PW}@db.example.com/x?sslmode=disable"
     )

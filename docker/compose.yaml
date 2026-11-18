@@ -1,4 +1,4 @@
-# Local databases for the HP (and later the ARM VM). Same major versions as the cloud
+# Local databases for the main laptop (and later the server). Same major versions as the cloud
 # testing setup: Postgres 18 (Neon) and MongoDB 8.0 (Atlas). Both images are multi-arch.
 #
 #   docker compose -f docker/compose.yaml --env-file docker/compose.env up -d

@@ -70,7 +70,7 @@ def fake_smtp(monkeypatch):
 
 def make_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env: str) -> Settings:
     base = {
-        "APP_PROFILE": "hp",
+        "APP_PROFILE": "full",
         "DATA_DIR": str(tmp_path / "data"),
         "LOG_DIR": str(tmp_path / "logs"),
         "ALERT_EMAIL_FROM": SENDER,
@@ -123,7 +123,7 @@ def test_warning_email_content_dry_run(tmp_path, monkeypatch):
         "Level:   WARNING",
         "2026-11-12 06:00:00 UTC",
         "2026-11-12 11:30:00 Asia/Kolkata",
-        "Profile: hp",
+        "Profile: full",
         "Only 2 GB left.",
         "drive: C:",
         FOOTER,
@@ -166,7 +166,7 @@ def test_port_465_uses_ssl_without_starttls(tmp_path, monkeypatch, fake_smtp):
 
 
 def test_missing_alert_settings_fails_without_raising(tmp_path, monkeypatch, fake_smtp):
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     result = AlertSender(load_settings()).send("warning", "X", "y")
     assert result.status == "failed"

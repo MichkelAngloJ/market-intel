@@ -17,8 +17,8 @@ PINGS = 3
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 REFUSAL = "refusing unencrypted connection to non-local host"
 # Profiles that run the databases in Docker, where one-word service names ("postgres") are
-# local. On the thinkpad profile such a name could be any machine on the network.
-SERVICE_NAME_PROFILES = {"hp", "cloud"}
+# local. On the restricted profile such a name could be any machine on the network.
+SERVICE_NAME_PROFILES = {"full", "server"}
 
 
 class InsecureConnectionError(Exception):
@@ -101,7 +101,7 @@ def is_local(hosts: str, *, service_names_local: bool = True) -> bool:
 
 
 def service_names_allowed(profile: str) -> bool:
-    """One-word hosts count as local only on the Docker profiles (hp, cloud)."""
+    """One-word hosts count as local only on the Docker profiles (full, server)."""
     return profile in SERVICE_NAME_PROFILES
 
 

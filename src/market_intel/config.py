@@ -44,7 +44,10 @@ DECISION_DATE = "2026-11-12"
 LLM_DEFAULT_CAP_INR = 1000
 LLM_ABSOLUTE_MAX_INR = 2000
 
-Profile = Literal["thinkpad", "hp", "cloud"]
+# restricted: testing, cloud databases, no broker keys (rule R1)
+# full: main work, Docker databases, broker keys allowed
+# server: later hosting
+Profile = Literal["restricted", "full", "server"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 GroupName = Literal["database", "database_admin", "mongo_admin", "upstox", "llm", "alerts"]
 
@@ -268,9 +271,9 @@ def _group_spec(group: str) -> tuple[type[_Group], tuple[str, ...], tuple[str, .
 
 def _check_rules(s: Settings) -> None:
     """Decisions from docs/decisions.md enforced at load time."""
-    if s.app_profile == "thinkpad" and (s.upstox_api_key or s.upstox_api_secret):
+    if s.app_profile == "restricted" and (s.upstox_api_key or s.upstox_api_secret):
         raise ConfigError(
-            "Rule R1: Upstox keys are not allowed on the ThinkPad profile "
+            "Rule R1: Upstox keys are not allowed on the restricted profile "
             f"(decision {DECISION_DATE}). Remove UPSTOX_API_KEY / UPSTOX_API_SECRET."
         )
 

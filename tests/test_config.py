@@ -45,9 +45,9 @@ def load_with(monkeypatch: pytest.MonkeyPatch, **env: str) -> Settings:
 
 
 def test_loads_with_only_profile(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "APP_PROFILE=thinkpad\n")
+    write_env(tmp_path, monkeypatch, "APP_PROFILE=restricted\n")
     s = load_settings()
-    assert s.app_profile == "thinkpad"
+    assert s.app_profile == "restricted"
     assert s.log_level == "INFO"
     assert s.display_timezone == "Asia/Kolkata"
     assert s.data_dir == (tmp_path / "data").resolve()
@@ -69,14 +69,14 @@ def test_missing_profile_is_clear_error():
 def test_invalid_profile_lists_allowed_values(monkeypatch):
     with pytest.raises(ConfigError) as err:
         load_with(monkeypatch, APP_PROFILE="laptop")
-    assert all(p in str(err.value) for p in ("thinkpad", "hp", "cloud"))
+    assert all(p in str(err.value) for p in ("restricted", "full", "server"))
 
 
 def test_env_example_copy_loads_with_defaults(tmp_path, monkeypatch):
     example = (REAL_REPO / ".env.example").read_text(encoding="utf-8")
-    write_env(tmp_path, monkeypatch, example.replace("APP_PROFILE=", "APP_PROFILE=hp"))
+    write_env(tmp_path, monkeypatch, example.replace("APP_PROFILE=", "APP_PROFILE=full"))
     s = load_settings()
-    assert s.app_profile == "hp"
+    assert s.app_profile == "full"
     assert s.llm_monthly_cap_inr == 1000
     assert s.llm_warn_pct == 80
     assert s.llm_cap_raise_approved is False
@@ -84,22 +84,22 @@ def test_env_example_copy_loads_with_defaults(tmp_path, monkeypatch):
 
 
 def test_real_env_var_overrides_env_file(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "APP_PROFILE=thinkpad\nLOG_LEVEL=DEBUG\n")
+    write_env(tmp_path, monkeypatch, "APP_PROFILE=restricted\nLOG_LEVEL=DEBUG\n")
     assert load_with(monkeypatch, LOG_LEVEL="ERROR").log_level == "ERROR"
 
 
 def test_env_found_at_repo_root_from_subfolder(tmp_path, monkeypatch):
-    (tmp_path / ".env").write_text("APP_PROFILE=cloud\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("APP_PROFILE=server\n", encoding="utf-8")
     sub = tmp_path / "a" / "b"
     sub.mkdir(parents=True)
     monkeypatch.chdir(sub)
-    assert load_settings().app_profile == "cloud"
+    assert load_settings().app_profile == "server"
 
 
 def test_env_file_var_overrides_repo_root_env(tmp_path, monkeypatch):
-    (tmp_path / ".env").write_text("APP_PROFILE=cloud\n", encoding="utf-8")
-    write_env(tmp_path, monkeypatch, "APP_PROFILE=hp\n")
-    assert load_settings().app_profile == "hp"
+    (tmp_path / ".env").write_text("APP_PROFILE=server\n", encoding="utf-8")
+    write_env(tmp_path, monkeypatch, "APP_PROFILE=full\n")
+    assert load_settings().app_profile == "full"
 
 
 def test_env_file_var_pointing_nowhere_is_error(tmp_path, monkeypatch):
@@ -109,29 +109,29 @@ def test_env_file_var_pointing_nowhere_is_error(tmp_path, monkeypatch):
 
 
 def test_get_settings_is_cached(monkeypatch):
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     first = get_settings()
-    monkeypatch.setenv("APP_PROFILE", "cloud")
+    monkeypatch.setenv("APP_PROFILE", "server")
     assert get_settings() is first
     get_settings.cache_clear()
-    assert get_settings().app_profile == "cloud"
+    assert get_settings().app_profile == "server"
 
 
 # --- rules -------------------------------------------------------------------------------
 
 
-def test_r1_thinkpad_rejects_upstox_key(monkeypatch):
+def test_r1_restricted_rejects_upstox_key(monkeypatch):
     with pytest.raises(ConfigError, match="R1"):
-        load_with(monkeypatch, APP_PROFILE="thinkpad", UPSTOX_API_KEY=FAKE)
+        load_with(monkeypatch, APP_PROFILE="restricted", UPSTOX_API_KEY=FAKE)
 
 
-def test_r1_thinkpad_rejects_upstox_secret(monkeypatch):
+def test_r1_restricted_rejects_upstox_secret(monkeypatch):
     with pytest.raises(ConfigError, match="R1"):
-        load_with(monkeypatch, APP_PROFILE="thinkpad", UPSTOX_API_SECRET=FAKE)
+        load_with(monkeypatch, APP_PROFILE="restricted", UPSTOX_API_SECRET=FAKE)
 
 
 def test_r1_hp_allows_upstox_key(monkeypatch):
-    assert load_with(monkeypatch, APP_PROFILE="hp", UPSTOX_API_KEY=FAKE).upstox_api_key
+    assert load_with(monkeypatch, APP_PROFILE="full", UPSTOX_API_KEY=FAKE).upstox_api_key
 
 
 @pytest.mark.parametrize(
@@ -147,7 +147,7 @@ def test_r1_hp_allows_upstox_key(monkeypatch):
     ],
 )
 def test_r2_llm_cap(monkeypatch, cap, approved, ok):
-    env = {"APP_PROFILE": "hp", "LLM_MONTHLY_CAP_INR": cap, "LLM_CAP_RAISE_APPROVED": approved}
+    env = {"APP_PROFILE": "full", "LLM_MONTHLY_CAP_INR": cap, "LLM_CAP_RAISE_APPROVED": approved}
     if ok:
         assert load_with(monkeypatch, **env).llm_monthly_cap_inr == int(cap)
     else:
@@ -160,15 +160,15 @@ def test_r2_llm_cap(monkeypatch, cap, approved, ok):
 )
 def test_r3_warn_pct(monkeypatch, pct, ok):
     if ok:
-        assert load_with(monkeypatch, APP_PROFILE="hp", LLM_WARN_PCT=pct).llm_warn_pct == int(pct)
+        assert load_with(monkeypatch, APP_PROFILE="full", LLM_WARN_PCT=pct).llm_warn_pct == int(pct)
     else:
         with pytest.raises(ConfigError, match="R3"):
-            load_with(monkeypatch, APP_PROFILE="hp", LLM_WARN_PCT=pct)
+            load_with(monkeypatch, APP_PROFILE="full", LLM_WARN_PCT=pct)
 
 
 def test_rule_error_names_decision_date(monkeypatch):
     with pytest.raises(ConfigError, match="2026-11-12"):
-        load_with(monkeypatch, APP_PROFILE="hp", LLM_MONTHLY_CAP_INR="0")
+        load_with(monkeypatch, APP_PROFILE="full", LLM_MONTHLY_CAP_INR="0")
 
 
 # --- secret masking ----------------------------------------------------------------------
@@ -186,7 +186,7 @@ ALL_SECRETS = {
 
 
 def test_secrets_masked_in_repr_str_and_dumps(monkeypatch):
-    s = load_with(monkeypatch, APP_PROFILE="hp", **ALL_SECRETS)
+    s = load_with(monkeypatch, APP_PROFILE="full", **ALL_SECRETS)
     for text in (repr(s), str(s), s.model_dump_json(), str(s.model_dump())):
         assert FAKE not in text
     db = s.require("database")
@@ -195,7 +195,7 @@ def test_secrets_masked_in_repr_str_and_dumps(monkeypatch):
 
 
 def test_secrets_masked_in_command_output(monkeypatch, capsys):
-    for key, value in {"APP_PROFILE": "hp", **ALL_SECRETS}.items():
+    for key, value in {"APP_PROFILE": "full", **ALL_SECRETS}.items():
         monkeypatch.setenv(key, value)
     assert config.main() == 0
     out = capsys.readouterr()
@@ -205,14 +205,14 @@ def test_secrets_masked_in_command_output(monkeypatch, capsys):
 
 def test_secrets_masked_in_rule_error(monkeypatch):
     with pytest.raises(ConfigError) as err:
-        load_with(monkeypatch, APP_PROFILE="thinkpad", **ALL_SECRETS)
+        load_with(monkeypatch, APP_PROFILE="restricted", **ALL_SECRETS)
     assert FAKE not in str(err.value) and FAKE not in repr(err.value)
     assert err.value.__cause__ is None
 
 
 def test_secrets_masked_in_validation_error(monkeypatch):
     with pytest.raises(ConfigError) as err:
-        load_with(monkeypatch, APP_PROFILE="hp", LLM_WARN_PCT="not-a-number", **ALL_SECRETS)
+        load_with(monkeypatch, APP_PROFILE="full", LLM_WARN_PCT="not-a-number", **ALL_SECRETS)
     assert "LLM_WARN_PCT" in str(err.value)
     assert FAKE not in str(err.value)
     # "from None" drops pydantic's ValidationError, which could otherwise show up in tracebacks
@@ -220,7 +220,7 @@ def test_secrets_masked_in_validation_error(monkeypatch):
 
 
 def test_require_database_error_names_only(monkeypatch):
-    s = load_with(monkeypatch, APP_PROFILE="hp", POSTGRES_URL=FAKE)
+    s = load_with(monkeypatch, APP_PROFILE="full", POSTGRES_URL=FAKE)
     with pytest.raises(ConfigError) as err:
         s.require("database")
     msg = str(err.value)
@@ -229,14 +229,14 @@ def test_require_database_error_names_only(monkeypatch):
 
 
 def test_require_database_lists_both_missing(monkeypatch):
-    s = load_with(monkeypatch, APP_PROFILE="hp")
+    s = load_with(monkeypatch, APP_PROFILE="full")
     with pytest.raises(ConfigError) as err:
         s.require("database")
     assert "POSTGRES_URL" in str(err.value) and "MONGODB_URI" in str(err.value)
 
 
 def test_require_complete_group_returns_view(monkeypatch):
-    s = load_with(monkeypatch, APP_PROFILE="hp", GEMINI_API_KEY=FAKE)
+    s = load_with(monkeypatch, APP_PROFILE="full", GEMINI_API_KEY=FAKE)
     llm = s.require("llm")
     assert llm.llm_monthly_cap_inr == 1000 and llm.groq_api_key is None
 
@@ -259,13 +259,13 @@ def run_command(tmp_path: Path, env_text: str, **extra: str) -> subprocess.Compl
 
 
 def test_command_exit_zero_when_valid(tmp_path):
-    result = run_command(tmp_path, "APP_PROFILE=thinkpad\n")
+    result = run_command(tmp_path, "APP_PROFILE=restricted\n")
     assert result.returncode == 0, result.stderr
-    assert "profile: thinkpad" in result.stdout
+    assert "profile: restricted" in result.stdout
 
 
 def test_command_nonzero_on_rule_violation(tmp_path):
-    result = run_command(tmp_path, "APP_PROFILE=thinkpad\n", UPSTOX_API_KEY=FAKE)
+    result = run_command(tmp_path, "APP_PROFILE=restricted\n", UPSTOX_API_KEY=FAKE)
     assert result.returncode != 0
     assert "R1" in result.stderr
     assert FAKE not in result.stdout + result.stderr
@@ -276,17 +276,17 @@ def test_command_nonzero_on_rule_violation(tmp_path):
 
 def test_invalid_display_timezone_is_error(monkeypatch):
     with pytest.raises(ConfigError, match="DISPLAY_TIMEZONE") as err:
-        load_with(monkeypatch, APP_PROFILE="hp", DISPLAY_TIMEZONE="Mars/Olympus")
+        load_with(monkeypatch, APP_PROFILE="full", DISPLAY_TIMEZONE="Mars/Olympus")
     assert "unknown time zone" in str(err.value)
 
 
 def test_valid_display_timezone_loads(monkeypatch):
-    s = load_with(monkeypatch, APP_PROFILE="hp", DISPLAY_TIMEZONE="Europe/London")
+    s = load_with(monkeypatch, APP_PROFILE="full", DISPLAY_TIMEZONE="Europe/London")
     assert s.display_timezone == "Europe/London"
 
 
 def test_command_masks_emails(monkeypatch, capsys):
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     monkeypatch.setenv("ALERT_EMAIL_FROM", "sender.box@example.com")
     monkeypatch.setenv("ALERT_EMAIL_TO", "main.box@example.org")
     assert config.main() == 0
@@ -305,7 +305,7 @@ def test_mask_email(address, masked):
 
 
 def test_alert_settings_defaults_and_bounds(monkeypatch):
-    s = load_with(monkeypatch, APP_PROFILE="hp")
+    s = load_with(monkeypatch, APP_PROFILE="full")
     assert (s.alert_smtp_host, s.alert_smtp_port) == ("smtp.gmail.com", 587)
     assert s.alert_throttle_hours == 6 and s.alert_dry_run is False
     assert s.log_dir.name == "logs" and s.log_dir.is_absolute()

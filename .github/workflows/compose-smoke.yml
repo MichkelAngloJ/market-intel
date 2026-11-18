@@ -74,7 +74,7 @@ jobs:
             echo "MONGO_SETUP_PASSWORD=$setup_pw"
           } > docker/compose.env
           {
-            echo "APP_PROFILE=hp"
+            echo "APP_PROFILE=full"
             echo "ALERT_DRY_RUN=true"
             # Owner (superuser here) for migrations only; the app and tests use mi_app.
             echo "POSTGRES_ADMIN_URL=postgresql://market_intel:$pg_pw@127.0.0.1:5432/market_intel"
@@ -100,7 +100,7 @@ jobs:
           grep -q "nothing to change" mongo_setup_2.txt
 
       # Prove every migration applies, undoes and re-applies cleanly (CI only: a downgrade
-      # drops tables, so it is never run on Neon or HP data).
+      # drops tables, so it is never run on real data).
       - name: Migrations up, down, up
         run: |
           uv run alembic upgrade head

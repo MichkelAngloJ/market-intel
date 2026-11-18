@@ -71,7 +71,7 @@ class FakeClient:
 
 
 def settings(tmp_path, monkeypatch):
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("ALERT_DRY_RUN", "true")
     monkeypatch.setenv("POSTGRES_URL", "postgresql://u:p@db.invalid/x?sslmode=require")

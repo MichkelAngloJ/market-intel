@@ -50,14 +50,14 @@ def mongo_calls(monkeypatch):
 @pytest.mark.parametrize(
     ("hosts", "profile", "local"),
     [
-        ("localhost", "thinkpad", True),
-        ("127.0.0.1", "thinkpad", True),
-        ("[::1]:5432", "thinkpad", True),
-        ("postgres", "thinkpad", False),  # one word: could be any machine on the network
-        ("postgres", "hp", True),  # Docker service name
-        ("mongo", "cloud", True),
-        ("db.example.com", "hp", False),
-        ("localhost,mongo2", "thinkpad", False),
+        ("localhost", "restricted", True),
+        ("127.0.0.1", "restricted", True),
+        ("[::1]:5432", "restricted", True),
+        ("postgres", "restricted", False),  # one word: could be any machine on the network
+        ("postgres", "full", True),  # Docker service name
+        ("mongo", "server", True),
+        ("db.example.com", "full", False),
+        ("localhost,mongo2", "restricted", False),
     ],
 )
 def test_host_is_local_depends_on_profile(hosts, profile, local):
@@ -70,9 +70,9 @@ def test_host_is_local_depends_on_profile(hosts, profile, local):
 @pytest.mark.parametrize(
     ("profile", "url"),
     [
-        ("hp", f"postgresql://{FAKE_USER}:{FAKE_PW}@db.example.com:5432/x?sslmode=disable"),
-        ("hp", f"postgresql://{FAKE_USER}:{FAKE_PW}@db.example.com:5432/x"),
-        ("thinkpad", f"postgresql://{FAKE_USER}:{FAKE_PW}@postgres:5432/x"),
+        ("full", f"postgresql://{FAKE_USER}:{FAKE_PW}@db.example.com:5432/x?sslmode=disable"),
+        ("full", f"postgresql://{FAKE_USER}:{FAKE_PW}@db.example.com:5432/x"),
+        ("restricted", f"postgresql://{FAKE_USER}:{FAKE_PW}@postgres:5432/x"),
     ],
 )
 def test_postgres_connect_refuses_without_connecting(monkeypatch, pg_calls, profile, url):
@@ -86,7 +86,7 @@ def test_postgres_connect_refuses_without_connecting(monkeypatch, pg_calls, prof
 
 @pytest.mark.parametrize(
     ("profile", "host"),
-    [("thinkpad", "127.0.0.1"), ("thinkpad", "localhost"), ("hp", "postgres")],
+    [("restricted", "127.0.0.1"), ("restricted", "localhost"), ("full", "postgres")],
 )
 def test_postgres_connect_allows_local_without_tls(monkeypatch, pg_calls, profile, host):
     db = db_settings(monkeypatch, profile, pg=f"postgresql://{FAKE_USER}:{FAKE_PW}@{host}/x")
@@ -96,14 +96,14 @@ def test_postgres_connect_allows_local_without_tls(monkeypatch, pg_calls, profil
 
 def test_postgres_connect_url_passes_autocommit(pg_calls):
     url = f"postgresql://{FAKE_USER}:{FAKE_PW}@db.invalid/x?sslmode=verify-full"
-    postgres.connect_url(url, profile="thinkpad", timeout_s=5, autocommit=False)
+    postgres.connect_url(url, profile="restricted", timeout_s=5, autocommit=False)
     assert pg_calls == [
         {"connect_timeout": 5, "application_name": "market-intel", "autocommit": False}
     ]
 
 
-def test_postgres_check_refuses_service_name_on_thinkpad(monkeypatch):
-    db = db_settings(monkeypatch, "thinkpad", pg=f"postgresql://{FAKE_USER}:{FAKE_PW}@postgres/x")
+def test_postgres_check_refuses_service_name_on_restricted(monkeypatch):
+    db = db_settings(monkeypatch, "restricted", pg=f"postgresql://{FAKE_USER}:{FAKE_PW}@postgres/x")
     report = postgres.check(db, connector=lambda _db: pytest.fail("connected"))
     assert report.refused and report.tls is False
 
@@ -114,9 +114,9 @@ def test_postgres_check_refuses_service_name_on_thinkpad(monkeypatch):
 @pytest.mark.parametrize(
     ("profile", "url"),
     [
-        ("hp", f"mongodb://{FAKE_USER}:{FAKE_PW}@db.example.com:27017/?tls=false"),
-        ("hp", f"mongodb+srv://{FAKE_USER}:{FAKE_PW}@c.example.com/?ssl=false"),
-        ("thinkpad", f"mongodb://{FAKE_USER}:{FAKE_PW}@mongo:27017/"),
+        ("full", f"mongodb://{FAKE_USER}:{FAKE_PW}@db.example.com:27017/?tls=false"),
+        ("full", f"mongodb+srv://{FAKE_USER}:{FAKE_PW}@c.example.com/?ssl=false"),
+        ("restricted", f"mongodb://{FAKE_USER}:{FAKE_PW}@mongo:27017/"),
     ],
 )
 def test_mongo_client_refuses_without_creating_client(monkeypatch, mongo_calls, profile, url):
@@ -128,7 +128,7 @@ def test_mongo_client_refuses_without_creating_client(monkeypatch, mongo_calls, 
 
 
 @pytest.mark.parametrize(
-    ("profile", "host"), [("thinkpad", "127.0.0.1:27017"), ("hp", "mongo:27017")]
+    ("profile", "host"), [("restricted", "127.0.0.1:27017"), ("full", "mongo:27017")]
 )
 def test_mongo_client_allows_local_without_tls(monkeypatch, mongo_calls, profile, host):
     db = db_settings(monkeypatch, profile, mongo_uri=f"mongodb://{FAKE_USER}:{FAKE_PW}@{host}/")
@@ -140,16 +140,16 @@ def test_mongo_client_allows_local_without_tls(monkeypatch, mongo_calls, profile
 
 
 def test_database_admin_group_missing_is_clear_error(monkeypatch):
-    monkeypatch.setenv("APP_PROFILE", "hp")
+    monkeypatch.setenv("APP_PROFILE", "full")
     with pytest.raises(ConfigError, match="POSTGRES_ADMIN_URL"):
         load_settings().require("database_admin")
 
 
 def test_database_admin_group_hides_the_url(monkeypatch):
-    monkeypatch.setenv("APP_PROFILE", "thinkpad")
+    monkeypatch.setenv("APP_PROFILE", "restricted")
     url = f"postgresql://owner:{FAKE_PW}@db.invalid/x?sslmode=require"
     monkeypatch.setenv("POSTGRES_ADMIN_URL", url)
     admin = load_settings().require("database_admin")
     assert admin.postgres_admin_url.get_secret_value() == url
-    assert admin.app_profile == "thinkpad"
+    assert admin.app_profile == "restricted"
     assert FAKE_PW not in repr(admin) and FAKE_PW not in str(admin)
