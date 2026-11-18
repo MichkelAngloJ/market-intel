@@ -9,6 +9,7 @@ on:
       - "docker/**"
       - "src/market_intel/db/**"
       - "src/market_intel/db_check.py"
+      - "src/market_intel/health.py"
       - "src/market_intel/mongo/**"
       - "src/market_intel/mongo_setup.py"
       - "src/market_intel/config.py"
@@ -24,6 +25,7 @@ on:
       - "docker/**"
       - "src/market_intel/db/**"
       - "src/market_intel/db_check.py"
+      - "src/market_intel/health.py"
       - "src/market_intel/mongo/**"
       - "src/market_intel/mongo_setup.py"
       - "src/market_intel/config.py"
@@ -118,6 +120,16 @@ jobs:
         env:
           ALERT_DRY_RUN: "true"
         run: uv run python -m market_intel.db_check
+
+      # The daily health check against Docker: JSON output, and no check may FAIL.
+      - name: Health check (JSON, no FAIL)
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          # "|| true": always print the table below; the jq -e line decides pass/fail.
+          uv run python -m market_intel.health --json > health.json || true
+          jq -r '.checks[] | "\(.status)  \(.name)  \(.message)"' health.json
+          jq -e '[.checks[] | select(.status == "FAIL")] | length == 0' health.json
 
       - name: Stop databases
         if: always()
