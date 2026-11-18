@@ -54,3 +54,80 @@ def test_compose_env_example_values_are_empty() -> None:
         key, value = line.split("=", 1)
         assert key.strip(), f"empty key in: {line!r}"
         assert value.strip() == "", f"{key.strip()} must have an empty value"
+
+
+# --- public repo: no data, predictions, signals, models or notebook outputs ---------------
+
+DATA_DIRS = (
+    "data",
+    "models",
+    "mlruns",
+    "logs",
+    "outputs",
+    "predictions",
+    "signals",
+    "reports",
+    "backtests",
+    "paper_trades",
+)
+DATA_EXTENSIONS = {
+    ".csv",
+    ".parquet",
+    ".feather",
+    ".h5",
+    ".db",
+    ".sqlite",
+    ".duckdb",
+    ".xlsx",
+    ".pkl",
+    ".pt",
+    ".joblib",
+}
+FIXTURES = "tests/fixtures/"
+MAX_BYTES = 1024 * 1024
+SIZE_EXCEPTIONS = {"uv.lock"}
+
+
+def _tracked() -> list[str]:
+    # Includes staged files, so a force-added file is caught before it is committed.
+    result = _git("ls-files")
+    assert result.returncode == 0, result.stderr
+    return result.stdout.splitlines()
+
+
+def test_no_tracked_files_in_data_folders() -> None:
+    bad = [p for p in _tracked() if any(part in DATA_DIRS for part in p.split("/")[:-1])]
+    assert not bad, f"files in data/result folders are tracked: {bad}"
+
+
+def test_no_tracked_data_files_outside_fixtures() -> None:
+    bad = [
+        p
+        for p in _tracked()
+        if Path(p).suffix.lower() in DATA_EXTENSIONS and not p.startswith(FIXTURES)
+    ]
+    assert not bad, f"data files are tracked outside {FIXTURES}: {bad}"
+
+
+def test_no_tracked_file_over_1_mb() -> None:
+    bad = [
+        p
+        for p in _tracked()
+        if p not in SIZE_EXCEPTIONS
+        and (REPO_ROOT / p).is_file()
+        and (REPO_ROOT / p).stat().st_size > MAX_BYTES
+    ]
+    assert not bad, f"files over 1 MB are tracked: {bad}"
+
+
+def test_no_tracked_notebook_has_outputs() -> None:
+    import json
+
+    bad = []
+    for p in _tracked():
+        if not p.endswith(".ipynb") or not (REPO_ROOT / p).is_file():
+            continue
+        notebook = json.loads((REPO_ROOT / p).read_text(encoding="utf-8"))
+        if any(cell.get("outputs") for cell in notebook.get("cells", [])):
+            bad.append(p)
+    assert not bad, f"notebooks with outputs are tracked (run nbstripout): {bad}"
