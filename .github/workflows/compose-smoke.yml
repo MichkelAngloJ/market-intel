@@ -9,6 +9,10 @@ on:
       - "docker/**"
       - "src/market_intel/db/**"
       - "src/market_intel/db_check.py"
+      - "src/market_intel/config.py"
+      - "migrations/**"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/compose-smoke.yml"
   pull_request:
     branches: [main]
@@ -16,6 +20,10 @@ on:
       - "docker/**"
       - "src/market_intel/db/**"
       - "src/market_intel/db_check.py"
+      - "src/market_intel/config.py"
+      - "migrations/**"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/compose-smoke.yml"
 
 permissions:
