@@ -11,6 +11,8 @@ on:
       - "src/market_intel/db_check.py"
       - "src/market_intel/config.py"
       - "migrations/**"
+      - "alembic.ini"
+      - "tests/integration/**"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/compose-smoke.yml"
@@ -22,6 +24,8 @@ on:
       - "src/market_intel/db_check.py"
       - "src/market_intel/config.py"
       - "migrations/**"
+      - "alembic.ini"
+      - "tests/integration/**"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/compose-smoke.yml"
@@ -42,15 +46,18 @@ jobs:
         run: |
           umask 077
           pg_pw=$(openssl rand -hex 24)
+          pg_app_pw=$(openssl rand -hex 24)
           root_pw=$(openssl rand -hex 24)
           app_pw=$(openssl rand -hex 24)
           echo "::add-mask::$pg_pw"
+          echo "::add-mask::$pg_app_pw"
           echo "::add-mask::$root_pw"
           echo "::add-mask::$app_pw"
           {
             echo "POSTGRES_USER=market_intel"
             echo "POSTGRES_PASSWORD=$pg_pw"
             echo "POSTGRES_DB=market_intel"
+            echo "PG_APP_PASSWORD=$pg_app_pw"
             echo "MONGO_INITDB_ROOT_USERNAME=root"
             echo "MONGO_INITDB_ROOT_PASSWORD=$root_pw"
             echo "MONGO_APP_USER=market_intel_app"
@@ -59,7 +66,9 @@ jobs:
           {
             echo "APP_PROFILE=hp"
             echo "ALERT_DRY_RUN=true"
-            echo "POSTGRES_URL=postgresql://market_intel:$pg_pw@127.0.0.1:5432/market_intel"
+            # Owner (superuser here) for migrations only; the app and tests use mi_app.
+            echo "POSTGRES_ADMIN_URL=postgresql://market_intel:$pg_pw@127.0.0.1:5432/market_intel"
+            echo "POSTGRES_URL=postgresql://mi_app:$pg_app_pw@127.0.0.1:5432/market_intel"
             echo "MONGODB_URI=mongodb://market_intel_app:$app_pw@127.0.0.1:27017/market_intel?authSource=market_intel"
           } > .env
 
@@ -71,7 +80,26 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      # Prove every migration applies, undoes and re-applies cleanly (CI only: a downgrade
+      # drops tables, so it is never run on Neon or HP data).
+      - name: Migrations up, down, up
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+          uv run alembic current
+
+      - name: No drift between schema.py and migrations
+        run: uv run alembic check
+
+      - name: Integration tests (permissions of mi_app)
+        env:
+          RUN_INTEGRATION: "1"
+        run: uv run pytest -m integration -v
+
       - name: Database check
+        env:
+          ALERT_DRY_RUN: "true"
         run: uv run python -m market_intel.db_check
 
       - name: Stop databases
