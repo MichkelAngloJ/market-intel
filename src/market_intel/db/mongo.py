@@ -12,8 +12,9 @@ from market_intel.config import DatabaseSettings
 from market_intel.db.common import (
     REFUSAL,
     DbReport,
+    InsecureConnectionError,
     default_clock,
-    is_local,
+    host_is_local,
     median_latency_ms,
     parse_url,
     query_params,
@@ -24,11 +25,30 @@ APP_NAME = "market-intel"
 HEALTHCHECK_COLLECTION = "_healthcheck"
 
 
+TLS_HINT = "use mongodb+srv:// or tls=true"
+
+
+def ensure_tls(url: str, profile: str) -> None:
+    """Raise InsecureConnectionError if ``url`` would reach a non-local host without TLS.
+
+    Runs before a client exists, so the password is never sent in plain text.
+    """
+    host = parse_url(url).hosts
+    if url_tls(url) is not True and not host_is_local(host, profile):
+        raise InsecureConnectionError(f"{REFUSAL} {host} ({TLS_HINT})")
+
+
 def client(db: DatabaseSettings) -> pymongo.MongoClient:
-    """A client that returns UTC-aware datetimes. Connects lazily on first use."""
+    """A client that returns UTC-aware datetimes. Connects lazily on first use.
+
+    Every MongoDB client in the project comes from here; it refuses unencrypted non-local
+    connections first (:func:`ensure_tls`).
+    """
+    url = db.mongodb_uri.get_secret_value()
+    ensure_tls(url, db.app_profile)
     timeout_ms = db.db_connect_timeout_s * 1000
     return pymongo.MongoClient(
-        db.mongodb_uri.get_secret_value(),
+        url,
         appname=APP_NAME,
         serverSelectionTimeoutMS=timeout_ms,
         connectTimeoutMS=timeout_ms,
@@ -72,10 +92,11 @@ def check(
     redact = redactor(url)
     report = DbReport(name="mongodb", host=parse_url(url).hosts, limit_mb=db.mongo_storage_limit_mb)
     tls = url_tls(url)
-    if tls is not True and not is_local(report.host):
-        # Refuse before creating a client, so the password is never sent in plain text.
+    try:
+        ensure_tls(url, db.app_profile)  # also inside client(); here for custom factories
+    except InsecureConnectionError:
         report.tls, report.refused = False, True
-        report.error = f"{REFUSAL} (use mongodb+srv:// or tls=true)"
+        report.error = f"{REFUSAL} ({TLS_HINT})"
         return report
     try:
         with client_factory(db) as mongo:

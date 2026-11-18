@@ -16,6 +16,13 @@ STORAGE_WARN_PCT = 80
 PINGS = 3
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 REFUSAL = "refusing unencrypted connection to non-local host"
+# Profiles that run the databases in Docker, where one-word service names ("postgres") are
+# local. On the thinkpad profile such a name could be any machine on the network.
+SERVICE_NAME_PROFILES = {"hp", "cloud"}
+
+
+class InsecureConnectionError(Exception):
+    """Raised before connecting when TLS is off for a non-local host. Names the host only."""
 
 
 @dataclass
@@ -81,10 +88,25 @@ def _bare_host(host: str) -> str:
     return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
 
 
-def is_local(hosts: str) -> bool:
-    """True if every host is this machine or a Docker service name (one word, no dot)."""
+def is_local(hosts: str, *, service_names_local: bool = True) -> bool:
+    """True if every host is this machine, or (when allowed) a Docker service name: one word,
+    no dot. Connection code always decides ``service_names_local`` from the profile, through
+    :func:`host_is_local`."""
     names = [_bare_host(h.strip()).lower() for h in hosts.split(",")]
-    return all(n in LOCAL_HOSTS or (n and "." not in n and ":" not in n) for n in names)
+    return all(
+        n in LOCAL_HOSTS or (service_names_local and n and "." not in n and ":" not in n)
+        for n in names
+    )
+
+
+def service_names_allowed(profile: str) -> bool:
+    """One-word hosts count as local only on the Docker profiles (hp, cloud)."""
+    return profile in SERVICE_NAME_PROFILES
+
+
+def host_is_local(hosts: str, profile: str) -> bool:
+    """The local-host rule used by every connection function."""
+    return is_local(hosts, service_names_local=service_names_allowed(profile))
 
 
 def redactor(url: str) -> Callable[[str], str]:

@@ -11,8 +11,9 @@ from market_intel.config import DatabaseSettings
 from market_intel.db.common import (
     REFUSAL,
     DbReport,
+    InsecureConnectionError,
     default_clock,
-    is_local,
+    host_is_local,
     median_latency_ms,
     parse_url,
     query_params,
@@ -29,22 +30,54 @@ ENCRYPTED_SSLMODES = {"require", "verify-ca", "verify-full"}
 log = get_logger("market_intel.db.postgres")
 
 
-def connect(db: DatabaseSettings, *, sleep: Callable[[float], None] | None = None):
-    """Open a connection. TLS settings (e.g. sslmode=require) come from the URL unchanged.
+TLS_HINT = "sslmode must be require, verify-ca or verify-full"
 
-    Retries once after 3 s: Neon's compute sleeps when idle and the first connect can time out.
+
+def ensure_tls(url: str, profile: str) -> None:
+    """Raise InsecureConnectionError if ``url`` would reach a non-local host without TLS.
+
+    Runs before any network call, so the password is never sent in plain text.
     """
+    host = parse_url(url).hosts
+    if not url_tls(url) and not host_is_local(host, profile):
+        raise InsecureConnectionError(f"{REFUSAL} {host} ({TLS_HINT})")
+
+
+def connect(db: DatabaseSettings, *, sleep: Callable[[float], None] | None = None):
+    """Open an app connection (POSTGRES_URL). See :func:`connect_url`."""
+    return connect_url(
+        db.postgres_url.get_secret_value(),
+        profile=db.app_profile,
+        timeout_s=db.db_connect_timeout_s,
+        sleep=sleep,
+    )
+
+
+def connect_url(
+    url: str,
+    *,
+    profile: str,
+    timeout_s: int,
+    autocommit: bool = True,
+    sleep: Callable[[float], None] | None = None,
+):
+    """Open a connection. Every Postgres connection in the project goes through here.
+
+    Refuses unencrypted non-local connections first (:func:`ensure_tls`). TLS settings
+    (e.g. sslmode=require) come from the URL unchanged. Retries once after 3 s: Neon's
+    compute sleeps when idle and the first connect can time out.
+    """
+    ensure_tls(url, profile)
     sleep = sleep or time.sleep
-    url = db.postgres_url.get_secret_value()
     redact = redactor(url)
     for attempt in (1, 2):
         try:
             # Keyword arguments are merged into the URL's settings; they don't replace them.
             return psycopg.connect(
                 url,
-                connect_timeout=db.db_connect_timeout_s,
+                connect_timeout=timeout_s,
                 application_name=APP_NAME,
-                autocommit=True,
+                autocommit=autocommit,
             )
         except psycopg.OperationalError as exc:
             if attempt == 2:
@@ -69,10 +102,11 @@ def check(
     url = db.postgres_url.get_secret_value()
     redact = redactor(url)
     report = DbReport(name="postgres", host=parse_url(url).hosts, limit_mb=db.pg_storage_limit_mb)
-    if not url_tls(url) and not is_local(report.host):
-        # Refuse before connecting, so the password is never sent in plain text.
+    try:
+        ensure_tls(url, db.app_profile)  # also inside connect(); here for custom connectors
+    except InsecureConnectionError:
         report.tls, report.refused = False, True
-        report.error = f"{REFUSAL} (sslmode must be require, verify-ca or verify-full)"
+        report.error = f"{REFUSAL} ({TLS_HINT})"
         return report
     try:
         with connector(db) as conn:
