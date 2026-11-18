@@ -9,6 +9,8 @@ on:
       - "docker/**"
       - "src/market_intel/db/**"
       - "src/market_intel/db_check.py"
+      - "src/market_intel/mongo/**"
+      - "src/market_intel/mongo_setup.py"
       - "src/market_intel/config.py"
       - "migrations/**"
       - "alembic.ini"
@@ -22,6 +24,8 @@ on:
       - "docker/**"
       - "src/market_intel/db/**"
       - "src/market_intel/db_check.py"
+      - "src/market_intel/mongo/**"
+      - "src/market_intel/mongo_setup.py"
       - "src/market_intel/config.py"
       - "migrations/**"
       - "alembic.ini"
@@ -49,10 +53,12 @@ jobs:
           pg_app_pw=$(openssl rand -hex 24)
           root_pw=$(openssl rand -hex 24)
           app_pw=$(openssl rand -hex 24)
+          setup_pw=$(openssl rand -hex 24)
           echo "::add-mask::$pg_pw"
           echo "::add-mask::$pg_app_pw"
           echo "::add-mask::$root_pw"
           echo "::add-mask::$app_pw"
+          echo "::add-mask::$setup_pw"
           {
             echo "POSTGRES_USER=market_intel"
             echo "POSTGRES_PASSWORD=$pg_pw"
@@ -62,6 +68,8 @@ jobs:
             echo "MONGO_INITDB_ROOT_PASSWORD=$root_pw"
             echo "MONGO_APP_USER=market_intel_app"
             echo "MONGO_APP_PASSWORD=$app_pw"
+            echo "MONGO_SETUP_USER=market_intel_setup"
+            echo "MONGO_SETUP_PASSWORD=$setup_pw"
           } > docker/compose.env
           {
             echo "APP_PROFILE=hp"
@@ -69,7 +77,9 @@ jobs:
             # Owner (superuser here) for migrations only; the app and tests use mi_app.
             echo "POSTGRES_ADMIN_URL=postgresql://market_intel:$pg_pw@127.0.0.1:5432/market_intel"
             echo "POSTGRES_URL=postgresql://mi_app:$pg_app_pw@127.0.0.1:5432/market_intel"
-            echo "MONGODB_URI=mongodb://market_intel_app:$app_pw@127.0.0.1:27017/market_intel?authSource=market_intel"
+            # Both Mongo users live in admin, as on Atlas.
+            echo "MONGODB_URI=mongodb://market_intel_app:$app_pw@127.0.0.1:27017/market_intel?authSource=admin"
+            echo "MONGODB_ADMIN_URI=mongodb://market_intel_setup:$setup_pw@127.0.0.1:27017/market_intel?authSource=admin"
           } > .env
 
       - name: Start databases
@@ -79,6 +89,13 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked
+
+      # Twice: the second run must find nothing to change (idempotent, never drops).
+      - name: MongoDB setup (twice)
+        run: |
+          uv run python -m market_intel.mongo_setup
+          uv run python -m market_intel.mongo_setup | tee mongo_setup_2.txt
+          grep -q "nothing to change" mongo_setup_2.txt
 
       # Prove every migration applies, undoes and re-applies cleanly (CI only: a downgrade
       # drops tables, so it is never run on Neon or HP data).
@@ -92,7 +109,7 @@ jobs:
       - name: No drift between schema.py and migrations
         run: uv run alembic check
 
-      - name: Integration tests (permissions of mi_app)
+      - name: Integration tests (Postgres and MongoDB rights, audit append-only)
         env:
           RUN_INTEGRATION: "1"
         run: uv run pytest -m integration -v
