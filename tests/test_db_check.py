@@ -322,3 +322,130 @@ def test_fake_credentials_never_shown(tmp_path, monkeypatch, capsys):
     assert "db.invalid" in out.out and "cluster.invalid" in out.out
     for leaked in (FAKE_PW, FAKE_USER, PG_URL, MONGO_URL):
         assert leaked not in shown
+
+
+# --- TLS rule: refuse unencrypted connections to non-local hosts ---------------------------
+
+PLAIN_PW = "fake-pass-456"
+
+
+@pytest.mark.parametrize(
+    ("hosts", "local"),
+    [
+        ("localhost", True),
+        ("127.0.0.1", True),
+        ("[::1]:5432", True),
+        ("postgres", True),  # Docker service name
+        ("mongo,mongo2", True),
+        ("db.example.com", False),
+        ("127.0.0.1,db.example.com", False),
+        ("10.0.0.5", False),
+    ],
+)
+def test_is_local(hosts, local):
+    from market_intel.db.common import is_local
+
+    assert is_local(hosts) is local
+
+
+@pytest.mark.parametrize(
+    ("query", "encrypted"),
+    [
+        ("", False),
+        ("?sslmode=disable", False),
+        ("?sslmode=allow", False),
+        ("?sslmode=prefer", False),
+        ("?sslmode=require", True),
+        ("?sslmode=verify-ca", True),
+        ("?application_name=x&sslmode=verify-full", True),
+    ],
+)
+def test_postgres_url_tls(query, encrypted):
+    assert postgres.url_tls(f"postgresql://u:p@db.example.com/x{query}") is encrypted
+
+
+@pytest.mark.parametrize(
+    ("url", "tls"),
+    [
+        ("mongodb+srv://u:p@c.example.com/", True),
+        ("mongodb+srv://u:p@c.example.com/?retryWrites=true", True),
+        ("mongodb+srv://u:p@c.example.com/?tls=false", False),
+        ("mongodb+srv://u:p@c.example.com/?ssl=FALSE", False),
+        ("mongodb://u:p@db.example.com:27017/", False),
+        ("mongodb://u:p@db.example.com:27017/?tls=false", False),
+        ("mongodb://u:p@db.example.com:27017/?tls=true", True),
+        ("mongodb://u:p@db.example.com:27017/?SSL=true", True),
+        ("http://not-mongo", None),
+    ],
+)
+def test_mongo_url_tls(url, tls):
+    assert mongo.url_tls(url) is tls
+
+
+def test_mongo_tls_fallback_is_safe_when_attribute_missing():
+    broken = type("Client", (), {"options": object()})()
+    assert mongo.tls_enabled(broken) is None
+
+
+def _never(_db):
+    pytest.fail("a connection was attempted")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"postgresql://{FAKE_USER}:{PLAIN_PW}@db.example.com:5432/x",
+        f"postgresql://{FAKE_USER}:{PLAIN_PW}@db.example.com:5432/x?sslmode=prefer",
+    ],
+)
+def test_postgres_refuses_non_local_without_tls(tmp_path, monkeypatch, url):
+    db = make_settings(tmp_path, monkeypatch, POSTGRES_URL=url).require("database")
+    report = postgres.check(db, connector=_never)
+    assert report.refused and not report.ok and report.tls is False
+    assert "refusing unencrypted connection" in report.error
+    assert PLAIN_PW not in report.error
+
+
+def test_postgres_allows_local_without_tls(tmp_path, monkeypatch):
+    url = f"postgresql://{FAKE_USER}:{PLAIN_PW}@127.0.0.1:5432/x"
+    db = make_settings(tmp_path, monkeypatch, POSTGRES_URL=url).require("database")
+    report = postgres.check(db, connector=lambda _db: FakePgConn(ssl=False))
+    assert report.ok and not report.refused and report.tls is False
+
+
+def test_mongo_refuses_non_local_without_tls(tmp_path, monkeypatch):
+    url = f"mongodb://{FAKE_USER}:{PLAIN_PW}@db.example.com:27017/?tls=false"
+    db = make_settings(tmp_path, monkeypatch, MONGODB_URI=url).require("database")
+    report = mongo.check(db, client_factory=_never)
+    assert report.refused and not report.ok and report.tls is False
+    assert "refusing unencrypted connection" in report.error
+
+
+def test_mongo_allows_docker_service_without_tls(tmp_path, monkeypatch):
+    url = f"mongodb://{FAKE_USER}:{PLAIN_PW}@mongo:27017/?authSource=market_intel"
+    db = make_settings(tmp_path, monkeypatch, MONGODB_URI=url).require("database")
+    database = FakeMongoDb()
+    report = mongo.check(db, client_factory=lambda _db: FakeMongoClient(database, tls=False))
+    assert report.ok and report.tls is False  # read from the URL, not the private attribute
+
+
+def test_mongo_tls_reported_from_url(tmp_path, monkeypatch):
+    db = make_settings(tmp_path, monkeypatch).require("database")  # mongodb+srv://
+    database = FakeMongoDb()
+    report = mongo.check(db, client_factory=lambda _db: FakeMongoClient(database, tls=False))
+    assert report.tls is True
+
+
+def test_refusal_end_to_end_no_connection_and_no_password(tmp_path, monkeypatch, capsys):
+    url = f"mongodb://{FAKE_USER}:{PLAIN_PW}@db.example.com:27017/?tls=false"
+    settings = make_settings(tmp_path, monkeypatch, MONGODB_URI=url)
+    monkeypatch.setattr(pymongo, "MongoClient", lambda *a, **kw: pytest.fail("connected"))
+    checkers = {"postgres": lambda _db: ok_report("postgres"), "mongodb": mongo.check}
+    assert db_check.run(settings, checkers=checkers) == 1
+    out = capsys.readouterr().out
+    assert "reachable : not tried (refused)" in out
+    assert "refusing unencrypted connection" in out
+    assert "alert     : critical -> dry_run" in out
+    logs = log_text(settings)
+    assert "Database connection not encrypted: mongodb" in logs
+    assert PLAIN_PW not in out + logs and FAKE_USER not in out + logs
