@@ -39,14 +39,22 @@ def ensure_tls(url: str, profile: str) -> None:
 
 
 def client(db: DatabaseSettings) -> pymongo.MongoClient:
+    """App client (MONGODB_URI). See :func:`client_url`."""
+    return client_url(
+        db.mongodb_uri.get_secret_value(),
+        profile=db.app_profile,
+        timeout_s=db.db_connect_timeout_s,
+    )
+
+
+def client_url(url: str, *, profile: str, timeout_s: int) -> pymongo.MongoClient:
     """A client that returns UTC-aware datetimes. Connects lazily on first use.
 
-    Every MongoDB client in the project comes from here; it refuses unencrypted non-local
-    connections first (:func:`ensure_tls`).
+    Every MongoDB client in the project comes from here (the app and mongo_setup); it refuses
+    unencrypted non-local connections first (:func:`ensure_tls`).
     """
-    url = db.mongodb_uri.get_secret_value()
-    ensure_tls(url, db.app_profile)
-    timeout_ms = db.db_connect_timeout_s * 1000
+    ensure_tls(url, profile)
+    timeout_ms = timeout_s * 1000
     return pymongo.MongoClient(
         url,
         appname=APP_NAME,
