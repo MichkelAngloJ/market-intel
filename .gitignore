@@ -30,6 +30,24 @@ logs/
 *.pkl
 *.pt
 
+# Public repo: never publish data, predictions, signals or results (SEBI / data rules)
+outputs/
+predictions/
+signals/
+reports/
+backtests/
+paper_trades/
+*.csv
+*.feather
+*.h5
+*.db
+*.sqlite
+*.duckdb
+*.xlsx
+*.joblib
+# Exception: small SYNTHETIC test files only
+!tests/fixtures/**
+
 # Database dumps / exports
 *.dump
 *.sql.gz

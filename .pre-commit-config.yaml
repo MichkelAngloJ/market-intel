@@ -28,3 +28,10 @@ repos:
         entry: uv run --frozen detect-secrets-hook --baseline .secrets.baseline
         language: system
         exclude: ^uv\.lock$
+      # Strips notebook outputs (and execution counts) before commit, so no results or
+      # data shown in a notebook can be published. Edits the working copy.
+      - id: nbstripout
+        name: nbstripout
+        entry: uv run --frozen nbstripout
+        language: system
+        types: [jupyter]
