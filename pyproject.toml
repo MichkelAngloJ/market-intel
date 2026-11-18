@@ -30,6 +30,9 @@ select = ["E", "F", "W", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: needs the real databases; skipped unless RUN_INTEGRATION=1 (CI compose-smoke)",
+]
 
 [dependency-groups]
 dev = [

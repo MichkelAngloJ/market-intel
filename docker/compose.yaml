@@ -8,18 +8,22 @@ name: market-intel
 
 services:
   postgres:
-    # May change to a TimescaleDB image in task 0.5.
+    # Plain Postgres, no TimescaleDB (decision 2026-11-18).
     image: postgres:18
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in docker/compose.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in docker/compose.env}
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in docker/compose.env}
+      # Read by postgres-init/01-app-role.sh to create the limited app login mi_app.
+      PG_APP_PASSWORD: ${PG_APP_PASSWORD:?set PG_APP_PASSWORD in docker/compose.env}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       # Postgres 18+ images keep data under /var/lib/postgresql/18/docker: mount the parent.
       - pgdata:/var/lib/postgresql
+      # Scripts here run once, on first start with an empty data volume.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     mem_limit: 2g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
