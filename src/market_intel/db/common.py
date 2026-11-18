@@ -9,11 +9,13 @@ import statistics
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import unquote
+from urllib.parse import parse_qsl, unquote
 
 MASK = "***"
 STORAGE_WARN_PCT = 80
 PINGS = 3
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+REFUSAL = "refusing unencrypted connection to non-local host"
 
 
 @dataclass
@@ -30,6 +32,7 @@ class DbReport:
     limit_mb: int | None = None
     write_ok: bool | None = None
     error: str | None = None
+    refused: bool = False  # True when the check refused to connect without TLS
 
     @property
     def used_pct(self) -> float | None:
@@ -63,6 +66,25 @@ def parse_url(url: str) -> UrlParts:
     user, _, password = userinfo.partition(":")
     hosts = ",".join(h.rsplit(":", 1)[0] if h.count(":") == 1 else h for h in hostlist.split(","))
     return UrlParts(hosts=hosts or "(unknown)", user=user, password=password)
+
+
+def query_params(url: str) -> dict[str, str]:
+    """Connection-string options with lower-cased names (both drivers treat them so)."""
+    query = url.split("?", 1)[1] if "?" in url else ""
+    return {k.lower(): v for k, v in parse_qsl(query, keep_blank_values=True)}
+
+
+def _bare_host(host: str) -> str:
+    """Host without port or IPv6 brackets: "[::1]:5432" -> "::1"."""
+    if host.startswith("["):
+        return host[1 : host.find("]")]
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+def is_local(hosts: str) -> bool:
+    """True if every host is this machine or a Docker service name (one word, no dot)."""
+    names = [_bare_host(h.strip()).lower() for h in hosts.split(",")]
+    return all(n in LOCAL_HOSTS or (n and "." not in n and ":" not in n) for n in names)
 
 
 def redactor(url: str) -> Callable[[str], str]:

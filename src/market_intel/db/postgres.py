@@ -8,11 +8,23 @@ from collections.abc import Callable
 import psycopg
 
 from market_intel.config import DatabaseSettings
-from market_intel.db.common import DbReport, default_clock, median_latency_ms, parse_url, redactor
+from market_intel.db.common import (
+    REFUSAL,
+    DbReport,
+    default_clock,
+    is_local,
+    median_latency_ms,
+    parse_url,
+    query_params,
+    redactor,
+)
 from market_intel.logging_setup import get_logger
 
 APP_NAME = "market-intel"
 RETRY_DELAY_S = 3
+# Only these sslmodes guarantee encryption; disable/allow/prefer (or none: libpq's default is
+# prefer) may fall back to plain text and send the password unencrypted.
+ENCRYPTED_SSLMODES = {"require", "verify-ca", "verify-full"}
 
 log = get_logger("market_intel.db.postgres")
 
@@ -42,6 +54,11 @@ def connect(db: DatabaseSettings, *, sleep: Callable[[float], None] | None = Non
     raise AssertionError("unreachable")
 
 
+def url_tls(url: str) -> bool:
+    """Does the connection string force TLS? Read from the URL only, before connecting."""
+    return query_params(url).get("sslmode", "").lower() in ENCRYPTED_SSLMODES
+
+
 def check(
     db: DatabaseSettings,
     *,
@@ -52,6 +69,11 @@ def check(
     url = db.postgres_url.get_secret_value()
     redact = redactor(url)
     report = DbReport(name="postgres", host=parse_url(url).hosts, limit_mb=db.pg_storage_limit_mb)
+    if not url_tls(url) and not is_local(report.host):
+        # Refuse before connecting, so the password is never sent in plain text.
+        report.tls, report.refused = False, True
+        report.error = f"{REFUSAL} (sslmode must be require, verify-ca or verify-full)"
+        return report
     try:
         with connector(db) as conn:
             report.reachable = True

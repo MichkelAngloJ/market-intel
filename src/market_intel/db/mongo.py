@@ -9,7 +9,16 @@ import pymongo
 from bson import ObjectId
 
 from market_intel.config import DatabaseSettings
-from market_intel.db.common import DbReport, default_clock, median_latency_ms, parse_url, redactor
+from market_intel.db.common import (
+    REFUSAL,
+    DbReport,
+    default_clock,
+    is_local,
+    median_latency_ms,
+    parse_url,
+    query_params,
+    redactor,
+)
 
 APP_NAME = "market-intel"
 HEALTHCHECK_COLLECTION = "_healthcheck"
@@ -28,10 +37,28 @@ def client(db: DatabaseSettings) -> pymongo.MongoClient:
     )
 
 
-def tls_enabled(mongo: pymongo.MongoClient) -> bool:
-    """Client-side TLS setting. PyMongo has no public flag; the pool's SSL context is set
-    exactly when TLS is on (mongodb+srv:// URLs turn it on by default)."""
-    return getattr(mongo.options.pool_options, "_ssl_context", None) is not None
+def url_tls(url: str) -> bool | None:
+    """TLS as set by the connection string; None if the scheme is not a MongoDB one.
+
+    mongodb+srv:// turns TLS on unless tls=false or ssl=false; mongodb:// only with
+    tls=true or ssl=true (the same rules PyMongo applies).
+    """
+    params = query_params(url)
+    flags = {params.get("tls", "").lower(), params.get("ssl", "").lower()}
+    if url.startswith("mongodb+srv://"):
+        return "false" not in flags
+    if url.startswith("mongodb://"):
+        return "true" in flags
+    return None
+
+
+def tls_enabled(mongo: pymongo.MongoClient) -> bool | None:
+    """Fallback only: PyMongo has no public TLS flag, so read the pool's private SSL context.
+    Returns None if a PyMongo version changes that attribute."""
+    try:
+        return mongo.options.pool_options._ssl_context is not None
+    except Exception:
+        return None
 
 
 def check(
@@ -44,6 +71,12 @@ def check(
     url = db.mongodb_uri.get_secret_value()
     redact = redactor(url)
     report = DbReport(name="mongodb", host=parse_url(url).hosts, limit_mb=db.mongo_storage_limit_mb)
+    tls = url_tls(url)
+    if tls is not True and not is_local(report.host):
+        # Refuse before creating a client, so the password is never sent in plain text.
+        report.tls, report.refused = False, True
+        report.error = f"{REFUSAL} (use mongodb+srv:// or tls=true)"
+        return report
     try:
         with client_factory(db) as mongo:
             database = mongo[db.mongodb_db]
@@ -51,7 +84,7 @@ def check(
             report.reachable = True
             report.version = mongo.server_info()["version"]
             report.latency_ms = median_latency_ms(lambda: database.command("ping"), clock)
-            report.tls = tls_enabled(mongo)
+            report.tls = tls if tls is not None else tls_enabled(mongo)
             stats = database.command("dbStats")
             # On-disk size incl. indexes: the conservative measure against the free limit.
             used = stats.get("storageSize", 0) + stats.get("indexSize", 0)

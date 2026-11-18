@@ -3,8 +3,9 @@
 For each database it prints reachable, host (only), version, latency, client-side TLS,
 storage vs the free-tier limit and a write test. Exit code 0 if everything passed, 1 if not.
 
-A failure sends a CRITICAL alert, storage >= 80% a WARNING (throttled per database). Without
-alert settings (e.g. in CI) it logs "alerts_not_configured" and carries on.
+A connection to a non-local host without TLS is refused before connecting (exit 1).
+A failure or refusal sends a CRITICAL alert, storage >= 80% a WARNING (throttled per
+database). Without alert settings (e.g. in CI) it logs "alerts_not_configured" and carries on.
 """
 
 from __future__ import annotations
@@ -29,9 +30,10 @@ def render(report: DbReport) -> str:
     def yes_no(value: bool | None) -> str:
         return "-" if value is None else ("yes" if value else "NO")
 
+    reachable = "not tried (refused)" if report.refused else yes_no(report.reachable)
     lines = [
         report.name,
-        f"  reachable : {yes_no(report.reachable)}",
+        f"  reachable : {reachable}",
         f"  host      : {report.host}",
     ]
     if report.reachable:
@@ -55,7 +57,16 @@ def render(report: DbReport) -> str:
 def alert_on(report: DbReport, settings: Settings, sender: AlertSender) -> None:
     """CRITICAL alert when a check failed, WARNING when storage is >= 80%."""
     alerts = []
-    if not report.ok:
+    if report.refused:
+        alerts.append(
+            (
+                "critical",
+                f"Database connection not encrypted: {report.name}",
+                f"db_unencrypted:{report.name}",
+                f"Refused to connect to {report.name} on host {report.host} without TLS.",
+            )
+        )
+    elif not report.ok:
         alerts.append(
             (
                 "critical",
