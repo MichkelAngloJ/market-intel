@@ -105,7 +105,7 @@ def test_app_cannot_change_collections(app_db, action):
     assert exc.value.code == UNAUTHORIZED
 
 
-def test_audit_outcome_once_then_refused(app_db):
+def test_audit_outcome_once_then_refused(app_db, setup_db):
     prediction_id = audit.record_prediction(app_db, demo_audit())
     try:
         outcome = Outcome(
@@ -120,4 +120,5 @@ def test_audit_outcome_once_then_refused(app_db):
         with pytest.raises(audit.AuditError):
             audit.record_outcome(app_db, prediction_id, outcome)
     finally:
-        app_db.prediction_audit.delete_one({"prediction_id": prediction_id})  # test cleanup
+        # Cleanup with the setup login: the app login has no remove right on audits.
+        setup_db.prediction_audit.delete_one({"prediction_id": prediction_id})

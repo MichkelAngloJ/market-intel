@@ -37,3 +37,15 @@ def isolated_env() -> Iterator[None]:
     get_settings.cache_clear()
     reset_logging()
     structlog.contextvars.clear_contextvars()
+
+
+@pytest.fixture
+def setup_db():
+    """The MongoDB SETUP login (MONGODB_ADMIN_URI). Tests use it only to clean up what the
+    app login may not delete (prediction_audit has no remove right)."""
+    from market_intel.db.mongo import client_url
+
+    admin = get_settings().require("mongo_admin")
+    url = admin.mongodb_admin_uri.get_secret_value()
+    with client_url(url, profile=admin.app_profile, timeout_s=admin.db_connect_timeout_s) as c:
+        yield c[admin.mongodb_db]
