@@ -3,27 +3,27 @@
 ## 2026-11-12 - Workspace and sync setup
 - The project folder is a standalone git repo (branch `main`), separate from any other repo on the machine.
 - Code syncs through a personal GitHub remote. Only `drive_sync/` syncs to Google Drive (it's git-ignored), so Drive never touches `.git`.
-- `.env` is synced by neither; copy it by hand when moving to the HP Victus.
+- `.env` is synced by neither; copy it by hand when moving to the main laptop. [redacted 2026-11-18: device names removed for privacy]
 
 ## 2026-11-12 - Machines and phases
-- Decision: The ThinkPad (no admin, no WSL, no NVIDIA GPU) is for testing and validation until end of Nov 2026. HP Victus becomes the main machine from Dec 2026. Go live only after validation.
+- Decision: The testing laptop is for testing and validation until end of Nov 2026. The main laptop becomes the main machine from Dec 2026. Go live only after validation. [redacted 2026-11-18: device names removed for privacy]
 - Concern (planner): Not my own device; personal project files and credentials on it.
 - Reason (owner): Only machine available until December.
 
-## 2026-11-12 - No real Upstox keys on the ThinkPad
-- Decision: Real broker credentials are used only on the HP.
+## 2026-11-12 - No real Upstox keys on the restricted profile
+- Decision: Real broker credentials are used only on the main laptop. [redacted 2026-11-18: device names removed for privacy]
 - Concern (planner): Files on a device I don't fully control may be readable by others.
 - Reason (owner): Accepted planner default.
 
 ## 2026-11-12 - Google Drive not used (updates "Workspace and sync setup")
-- Decision: drive_sync/ stays a local, git-ignored folder. Git is the backup for code.
-- Concern (planner): No off-machine backup for exports on the ThinkPad.
-- Reason (owner): Google Drive can't be installed on the ThinkPad; market data can be re-downloaded.
+- Decision: drive_sync/ stays a local, git-ignored folder. Git is the backup for code. [redacted 2026-11-18: device names removed for privacy]
+- Concern (planner): No off-machine backup for exports on the testing laptop.
+- Reason (owner): Google Drive can't be installed on the testing laptop; market data can be re-downloaded.
 
 ## 2026-11-12 - Databases during testing: free cloud
-- Decision: MongoDB Atlas free tier plus a free Postgres host (chosen in task 0.4) on the ThinkPad. Docker Compose on the HP from December.
+- Decision: MongoDB Atlas free tier plus a free Postgres host (chosen in task 0.4) on the testing laptop. Docker Compose on the main laptop from December. [redacted 2026-11-18: device names removed for privacy]
 - Concern (planner): Small free limits (~0.5 GB each); data and connection strings held by third parties; differs from the final Docker setup. SQLyog only works with MySQL, not Postgres.
-- Reason (owner): No admin/WSL, so no Docker. Cloud data can be reached from any laptop and removed later.
+- Reason (owner): The testing laptop can't run Docker. Cloud data can be reached from any laptop and removed later.
 
 ## 2026-11-12 - Python 3.12 managed by uv
 - Decision: Python 3.12 installed per-user by uv. System Python 3.14 untouched. uv lock file for identical installs on every machine.
@@ -76,12 +76,12 @@
 - Reason (owner): Accepted defaults.
 
 ## 2026-11-12 - Config: pydantic-settings, one .env per machine
-- Decision: pydantic-settings. APP_PROFILE = thinkpad | hp | cloud. Defaults live in code; each machine's .env sets only what differs. Settings are grouped and each group is checked when that part starts. Secrets are SecretStr. A command prints settings with secrets masked.
+- Decision: pydantic-settings. APP_PROFILE = restricted | full | cloud. Defaults live in code; each machine's .env sets only what differs. Settings are grouped and each group is checked when that part starts. Secrets are SecretStr. A command prints settings with secrets masked. [redacted 2026-11-18: device names removed for privacy]
 - Concern (planner): Per-machine settings files would be easier to read, but aren't worth maintaining while machines differ little.
 - Reason (owner): Accepted the planner's recommendation.
 
 ## 2026-11-12 - Decisions enforced in code
-- Decision: The thinkpad profile refuses to start if Upstox keys are present. LLM cap defaults to Rs 1,000; above that needs LLM_CAP_RAISE_APPROVED=true; Rs 2,000 is the absolute maximum; warning at 80%.
+- Decision: The restricted profile refuses to start if Upstox keys are present. LLM cap defaults to Rs 1,000; above that needs LLM_CAP_RAISE_APPROVED=true; Rs 2,000 is the absolute maximum; warning at 80%. [redacted 2026-11-18: device names removed for privacy]
 - Concern (planner): An env flag is easy to flip. The real approval is my explicit OK, logged here BEFORE the flag is set.
 - Reason (owner): Turn decisions into checks so they can't be skipped by mistake.
 
@@ -101,8 +101,8 @@
 - Reason (owner): The repo is public.
 
 ## 2026-11-12 - Alerts: dedicated Gmail through an app password
-- Decision: A separate Gmail used only for sending alerts (2-Step Verification + app password in .env). Alerts arrive in my main inbox. Gmail SMTP on port 587 with STARTTLS.
-- Concern (planner): An app password gives full access to that Gmail and sits on the ThinkPad; the risk is limited by using a dedicated empty account. Rejected: Gmail OAuth send-only (personal apps must re-authorise every 7 days) and Brevo/Resend (need an owned domain for reliable delivery).
+- Decision: A separate Gmail used only for sending alerts (2-Step Verification + app password in .env). Alerts arrive in my main inbox. Gmail SMTP on port 587 with STARTTLS. [redacted 2026-11-18: device names removed for privacy]
+- Concern (planner): An app password gives full access to that Gmail and sits on the testing laptop; the risk is limited by using a dedicated empty account. Rejected: Gmail OAuth send-only (personal apps must re-authorise every 7 days) and Brevo/Resend (need an owned domain for reliable delivery).
 - Reason (owner): Free, works now, keeps my main mailbox safe.
 
 ## 2026-11-12 - Logging: structlog, JSON files, secret masking
@@ -126,7 +126,7 @@
 - Reason (owner): Owner wants the project public while limiting reuse.
 
 ## 2026-11-13 - Testing-phase Postgres: Neon free plan
-- Decision: Neon free plan, Postgres 18, AWS Singapore, Neon's default database "neondb", direct connection with TLS. The HP's local database will be named market_intel; the connection URL carries the name, so code doesn't care.
+- Decision: Neon free plan, Postgres 18, AWS Singapore, Neon's default database "neondb", direct connection with TLS. The main laptop's local database will be named market_intel; the connection URL carries the name, so code doesn't care. [redacted 2026-11-18: device names removed for privacy]
 - Concern (planner): Singapore adds latency; compute sleeps after 5 minutes (first query ~1 s slower); the free plan accepts connections from any IP, so protection is the generated password plus TLS; 1 GB fits testing only. An unused pooled connection string is also kept in .env, which is one more copy of the password.
 - Reason (owner): Twice Supabase's storage, no weekly pause (Supabase) or power-off (Aiven), TimescaleDB available for task 0.5. Default database name and pooled string kept for simplicity. Limits checked 2026-11-13.
 
@@ -140,10 +140,10 @@
 - Concern (planner): Neon's server-side TLS view (pg_stat_ssl) reads false because its proxy handles encryption, so TLS is checked on the client side.
 - Reason (owner): Accepted the planner's recommendation.
 
-## 2026-11-13 - Docker Compose for the HP, tested in CI
-- Decision: docker/compose.yaml with postgres 18 and mongo 8.0 (same as the cloud), ports on 127.0.0.1 only, memory limits, health checks, multi-arch images. Credentials in the git-ignored docker/compose.env. Least-privilege app user. A CI job starts the stack and runs db_check whenever database files change.
+## 2026-11-13 - Docker Compose for the main laptop, tested in CI
+- Decision: docker/compose.yaml with postgres 18 and mongo 8.0 (same as the cloud), ports on 127.0.0.1 only, memory limits, health checks, multi-arch images. Credentials in the git-ignored docker/compose.env. Least-privilege app user. A CI job starts the stack and runs db_check whenever database files change. [redacted 2026-11-18: device names removed for privacy]
 - Concern (planner): Uses CI minutes on a private repo, so the job runs only on relevant changes. The TimescaleDB image decision is left to task 0.5.
-- Reason (owner): Verify the HP setup now, without Docker on the ThinkPad.
+- Reason (owner): Verify the main laptop setup now, without Docker on the testing laptop.
 
 ## 2026-11-13 - Planner review of the public repo
 - Decision: The repo stays public (owner's decision). The concerns in the entry "Public repo under PolyForm Strict 1.0.0" were written without planner review; the planner's concerns are recorded here.
@@ -166,13 +166,13 @@
 - Reason (owner): Accepted the 0.4 review recommendations.
 
 ## 2026-11-18 - Migrations: Alembic + SQLAlchemy Core
-- Decision: Alembic with SQLAlchemy 2 Core table definitions. Migrations live in migrations/ and run by hand with "alembic upgrade head" using the owner login (POSTGRES_ADMIN_URL), never automatically. CI proves every migration can be applied, undone and re-applied, and that code and migrations match (alembic check).
-- Concern (planner): Downgrades delete tables and data, so they run only in CI, never on Neon or HP data.
+- Decision: Alembic with SQLAlchemy 2 Core table definitions. Migrations live in migrations/ and run by hand with "alembic upgrade head" using the owner login (POSTGRES_ADMIN_URL), never automatically. CI proves every migration can be applied, undone and re-applied, and that code and migrations match (alembic check). [redacted 2026-11-18: device names removed for privacy]
+- Concern (planner): Downgrades delete tables and data, so they run only in CI, never on Neon or main laptop data.
 - Reason (owner): Accepted the planner's recommendation.
 
 ## 2026-11-18 - Plain Postgres, no TimescaleDB for now
-- Decision: Plain Postgres 18 with composite primary keys and BRIN time indexes. Tables are designed so they could become TimescaleDB hypertables later.
-- Concern (planner): Neon offers only TimescaleDB's Apache-2 features (no compression), so using it would make Neon and the HP behave differently. Revisit only if volumes demand it. This revises the 0.4 reason for picking Neon, which mentioned TimescaleDB.
+- Decision: Plain Postgres 18 with composite primary keys and BRIN time indexes. Tables are designed so they could become TimescaleDB hypertables later. [redacted 2026-11-18: device names removed for privacy]
+- Concern (planner): Neon offers only TimescaleDB's Apache-2 features (no compression), so using it would make Neon and the main laptop behave differently. Revisit only if volumes demand it. This revises the 0.4 reason for picking Neon, which mentioned TimescaleDB.
 - Reason (owner): Accepted.
 
 ## 2026-11-18 - Two Postgres logins
@@ -186,7 +186,7 @@
 - Reason (owner): Only what Phase 1 needs.
 
 ## 2026-11-18 - Encryption check in every connection
-- Decision: The refusal of unencrypted connections to non-local hosts moved into the connection functions, so every caller is covered. Single-word hostnames count as local only on the hp and cloud profiles.
+- Decision: The refusal of unencrypted connections to non-local hosts moved into the connection functions, so every caller is covered. Single-word hostnames count as local only on the full and cloud profiles. [redacted 2026-11-18: device names removed for privacy]
 - Concern (planner): None.
 - Reason (owner): Accepted the 0.5a review recommendations.
 
