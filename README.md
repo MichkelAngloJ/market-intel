@@ -89,7 +89,11 @@ Free-tier limits (checked 2026-11-13): Neon 1 GB storage, compute sleeps after 5
 ```
 docker compose -f docker/compose.yaml --env-file docker/compose.env up -d
 ```
-Ports listen on 127.0.0.1 only. The Mongo app user gets readWrite on `market_intel` only. On first start an init script creates the Postgres app login `mi_app` with `PG_APP_PASSWORD`. CI starts this stack whenever database files change, then runs the migrations, the permission tests and `db_check` against it.
+Ports listen on 127.0.0.1 only. On first start, init scripts create the same logins as in the cloud:
+- the Postgres app login `mi_app`, with `PG_APP_PASSWORD`;
+- the Mongo role `mi_app_rw`, the Mongo app user and the Mongo setup user, all stored in `admin` (connect with `?authSource=admin`).
+
+CI starts this stack whenever database files change, then runs `mongo_setup` twice, the migrations, the permission tests and `db_check` against it.
 
 ## Database schema and migrations
 
@@ -116,6 +120,51 @@ uv run alembic upgrade head    # apply all migrations (uses POSTGRES_ADMIN_URL)
 uv run alembic current         # show the version the database is at
 ```
 Downgrades drop tables and data, so they run **only in CI**, never on Neon or HP data. After changing `schema.py`, create a migration with `uv run alembic revision --autogenerate -m "..."` and review it by hand. CI runs `alembic check` to catch any drift.
+
+A trigger keeps `instruments.updated_at` current on every update.
+
+## MongoDB collections and audit records
+
+The documents are defined as Pydantic models in `src/market_intel/mongo/models.py`. Every document has `schema_version: 1`, and every time is stored in UTC.
+
+| Collection | Holds | Unique key |
+|---|---|---|
+| `news_items` | One news article: source, URL, title, and **`published_at`**, the time it became public | `url_hash` (sha256 of the normalised URL) |
+| `llm_extractions` | Events an LLM read from one article (RBI action, results surprise, order win, sentiment, ...), with its `published_at` | `news_item_id` + `prompt_version` |
+| `prediction_audit` | One record per prediction: inputs, model, SHAP reasons, news and LLM calls used, signal, and later the outcome | `prediction_id` |
+| `_healthcheck` | Used only by `db_check`'s write test | |
+
+The database checks every insert and update with a `$jsonSchema` validator (`strict`, `error`) that matches the models. A document missing a required field or holding a wrong type is rejected.
+
+**Setup command.** Collections, validators and indexes are created only by:
+```
+uv run python -m market_intel.mongo_setup
+```
+It is safe to run again: it creates what is missing, updates validators that changed, and prints a summary. A second run prints "nothing to change". It never drops a collection or an index. If an index exists with a different definition, it reports the conflict and changes nothing. It runs only when you start it.
+
+**Two MongoDB logins:**
+- `MONGODB_ADMIN_URI`, the setup login (readWrite + dbAdmin), is used **only** by `mongo_setup`.
+- `MONGODB_URI`, the app login (custom role `mi_app_rw`), has rights **per named collection** only:
+
+  | Collection | find | insert | update | remove |
+  |---|---|---|---|---|
+  | `news_items`, `llm_extractions` | yes | yes | yes | yes |
+  | `_healthcheck` | yes | yes | no | yes |
+  | `prediction_audit` | yes | yes | yes | **no** |
+
+  It also has listIndexes and collStats on these four, plus database-wide listCollections, dbStats and killAnyCursor. It can't create or drop collections, or change indexes or validators.
+
+  Rights are per collection because MongoDB's insert right also creates a missing collection. A database-wide insert would therefore let a typo create a new collection with no validator. Each new collection needs `mongo_setup` and a change to the role on Atlas. Run `mongo_setup` before the app writes anything: otherwise the app's first insert into one of the four collections would create it without a validator (`mongo_setup` adds it afterwards).
+
+**A second check in code.** App code reaches collections only through `market_intel.mongo.access.collection(db, name)`, which accepts only the four names and raises before contacting the database otherwise. `db_check` warns (without failing) when the database holds a collection that isn't in the list.
+
+**Audit records are append-only.** `market_intel.mongo.audit` is the only code that writes them:
+- `record_prediction` inserts a record once, with outcome status `pending`.
+- `record_outcome` adds the outcome once (`pending` -> `filled`). A second call is refused.
+
+There is no function to change or delete an audit record, and the database refuses deletes too: the app login has no remove right on `prediction_audit`. It does have update, which adding the outcome needs, so "only the outcome changes, and only once" is enforced in code. Demo or test records are cleaned up with the setup login.
+
+**Leakage guard.** A prediction audit is refused if its `feature_cutoff` (the time of the latest data used) or the `published_at` of any news it used is later than the prediction time (`created_at`). This is an early check; the full leakage test comes in Phase 2.
 
 ## Lint and tests
 

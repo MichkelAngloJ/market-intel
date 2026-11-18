@@ -189,3 +189,28 @@
 - Decision: The refusal of unencrypted connections to non-local hosts moved into the connection functions, so every caller is covered. Single-word hostnames count as local only on the hp and cloud profiles.
 - Concern (planner): None.
 - Reason (owner): Accepted the 0.5a review recommendations.
+
+## 2026-11-18 - MongoDB collections v1 and validation
+- Decision: news_items, llm_extractions and prediction_audit (plus _healthcheck). Pydantic models define the documents, and MongoDB $jsonSchema validators (strict, error) enforce required fields and types in the database too. Every news item and extracted event keeps the time it became public. An audit record is refused if its feature cutoff or any news it used is later than the prediction time (an early leakage guard).
+- Concern (planner): Validators check shape, not meaning. The full leakage test comes in Phase 2.
+- Reason (owner): Accepted the planner's recommendation.
+
+## 2026-11-18 - Audit records are append-only
+- Decision: A prediction audit is written once; only its outcome can be added later, once (outcome_status pending -> filled). The app login has no remove right on prediction_audit, so the database refuses deletes. The code offers no other way to change audit records.
+- Concern (planner): The app login still has update on prediction_audit (needed for the outcome), so "only the outcome changes" is enforced in code, not by the database.
+- Reason (owner): Keep the record honest.
+
+## 2026-11-18 - Two MongoDB logins
+- Decision: The setup login (readWrite + dbAdmin on market_intel) is used only by mongo_setup. The app login uses the custom role mi_app_rw, with rights granted per named collection: news_items, llm_extractions and _healthcheck get find, insert, update, remove, listIndexes and collStats (_healthcheck without update); prediction_audit gets the same without remove. listCollections, dbStats and killAnyCursor are database-wide. The app login cannot create, drop or change collections, indexes or validators. The Docker init script creates the same setup.
+- Concern (planner): Atlas user names can't be changed, so they differ from the plan. Each new collection now needs an Atlas role change, recorded in this log.
+- Reason (owner): Least privilege, as in Postgres.
+
+## 2026-11-18 - Postgres fixes from the 0.5b review
+- Decision: Migration 0003 adds a trigger that keeps instruments.updated_at current and grants mi_app the TEMP right explicitly. The Alembic message now reads "Connecting to host".
+- Concern (planner): None.
+- Reason (owner): Accepted the 0.5b review recommendations.
+
+## 2026-11-18 - MongoDB: insert also creates collections
+- Decision: Rights are granted per named collection instead of database-wide. Code reaches collections only through a helper that accepts names from the fixed list, and db_check warns about unexpected collections.
+- Concern (planner): The planner's first role design assumed that leaving out createCollection prevents new collections. That was wrong: MongoDB's insert right also creates a missing collection. The compose-smoke tests caught it by trying it, and permissions are now checked by behaviour, not only by their list. If mongo_setup hasn't run, the app could still create one of the four named collections; mongo_setup then adds its validator and indexes.
+- Reason (owner): Keep the guarantee that every collection goes through mongo_setup, enforced by the database, with code as a second check.
