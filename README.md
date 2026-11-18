@@ -12,7 +12,7 @@ only, never real orders.**
 
 **Status:** Phase 0 (foundations) is nearly done: configuration, logging and alerts, Postgres
 and MongoDB with limited logins, migrations, validated collections, a daily health check and a
-Colab template. Next: setting up the second laptop (HP), then Phase 1, the data pipeline.
+Colab template. Next: setting up the main laptop, then Phase 1, the data pipeline.
 
 ## Docs
 
@@ -25,14 +25,14 @@ Colab template. Next: setting up the second laptop (HP), then Phase 1, the data 
 
 ## Quick setup
 
-1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (per user, no admin
-   needed).
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (per user).
 2. Clone this repo and open a terminal in it.
 3. Install Python 3.12 and the locked dependencies: `uv sync`
 4. Install the git hooks (lint, format, secret scan, notebook stripping):
    `uv run pre-commit install`
-5. Copy `.env.example` to `.env` and set `APP_PROFILE` (`thinkpad`, `hp` or `cloud`). Leave
-   other values empty until a task needs them; never commit `.env`.
+5. Copy `.env.example` to `.env` and set `APP_PROFILE` (`restricted`, `full` or `server`; see
+   [Laptops and profiles](docs/architecture.md#laptops-and-profiles)). Leave other values
+   empty until a task needs them; never commit `.env`.
 6. Run the health check: `uv run python -m market_intel.health`
 
 Details, including how to copy secrets safely, are in the

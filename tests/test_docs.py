@@ -44,7 +44,7 @@ REQUIRED_HEADINGS = {
         "## Daily routine",
         "## Reading the health output",
         "## Setting up a new Windows laptop",
-        "### HP and Docker",
+        "### Main laptop and Docker",
         "## Secrets",
         "## Migrations",
         "## Adding a MongoDB collection",

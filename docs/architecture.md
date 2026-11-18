@@ -7,7 +7,7 @@ How market-intel works today, and what is planned. For day-to-day operation see 
 
 A command-line project in Python 3.12, run on one of two laptops (synced through git), with a
 Postgres database and a MongoDB database. Today both databases are free cloud services; on the
-HP they will run in Docker. Nothing is scheduled yet: every command runs only when started.
+main laptop they will run in Docker. Nothing is scheduled yet: every command runs only when started.
 
 ### Components now
 
@@ -15,7 +15,7 @@ Solid lines exist today. Dashed boxes and lines are **planned**.
 
 ```mermaid
 flowchart LR
-    subgraph Laptop[Laptop - ThinkPad or HP]
+    subgraph Laptop[Testing laptop or main laptop]
         CLI[CLI commands]
         CFG[env file and profile]
         LOGS[logs folder]
@@ -25,9 +25,9 @@ flowchart LR
     CLI --> ALERTS[Alerts]
     ALERTS --> SMTP[Gmail SMTP]
     SMTP --> INBOX[Inbox]
-    CLI -->|app login| PG[(Postgres - cloud now - Docker on HP later)]
+    CLI -->|app login| PG[(Postgres - cloud now - Docker on main laptop later)]
     CLI -->|owner login - migrations only| PG
-    CLI -->|app login| MDB[(MongoDB - cloud now - Docker on HP later)]
+    CLI -->|app login| MDB[(MongoDB - cloud now - Docker on main laptop later)]
     CLI -->|setup login - mongo_setup only| MDB
     CLI -->|git push and pull| GH[GitHub public repo]
     GH --> CI[ci.yml checks]
@@ -83,12 +83,19 @@ flowchart LR
 
 All are run with `uv run` in front.
 
-## Machines
+## Laptops and profiles
 
-- **ThinkPad (now):** testing and validation with the free cloud databases. No real broker
-  keys (rule R1).
-- **HP (from about 21 Nov 2026):** used **alternately** with the ThinkPad, synced through git;
-  it will run the databases in Docker. The HP setup is task 0.9.
+Each laptop's `.env` sets `APP_PROFILE`, named by what that machine may do:
+
+| Profile | Used on | Databases | Broker keys | One-word hosts (Docker service names) |
+|---|---|---|---|---|
+| `restricted` | The testing laptop (now): testing and validation | Cloud only (it can't run Docker) | Not allowed (rule R1) | Not local: need TLS |
+| `full` | The main laptop (from about 21 Nov 2026): main work | Docker allowed | Allowed | Local |
+| `server` | Later hosting | Docker allowed | Allowed | Local |
+
+- The two laptops are used **alternately**, synced through git (see the
+  [runbook](runbook.md#daily-routine)).
+- The main laptop's Docker setup is task 0.9.
 - **Go live** only after validation.
 
 ## Configuration and profiles
@@ -100,15 +107,17 @@ see `src/market_intel/config.py`.
   file named by `MARKET_INTEL_ENV_FILE`, e.g. in Docker), then the defaults in code.
 - **Empty values mean "use the default"** (`KEY=` counts as not set), so a fresh copy of
   `.env.example` loads cleanly. `.env` only sets what differs.
-- **Profiles** (`APP_PROFILE`): `thinkpad`, `hp` or `cloud`. The profile decides rule R1 and
-  whether one-word hostnames count as local (see the TLS rule below).
+- **Profiles** (`APP_PROFILE`): `restricted`, `full` or `server` (see
+  [Laptops and profiles](#laptops-and-profiles)). The profile decides rule R1 and whether
+  one-word hostnames count as local (see the TLS rule below). Any other value is refused with
+  an error listing the allowed ones.
 - **Groups:** settings are grouped (`database`, `database_admin`, `mongo_admin`, `upstox`,
   `llm`, `alerts`). A group is checked only when code that needs it calls
   `settings.require("<group>")`, which raises a clear error naming the missing variables. So
   the project starts with only `APP_PROFILE` set.
 - **Secrets** are `SecretStr` values: they never appear in repr, dumps or error messages.
 - **Rules checked at startup:**
-  - **R1:** the `thinkpad` profile refuses to start if Upstox keys are set.
+  - **R1:** the `restricted` profile refuses to start if Upstox keys are set.
   - **R2:** `LLM_MONTHLY_CAP_INR` defaults to 1000. Above 1000 needs
     `LLM_CAP_RAISE_APPROVED=true`, after an approval logged in the decision log; above 2000 is
     always rejected.
@@ -122,7 +131,7 @@ see `src/market_intel/config.py`.
 |---|---|---|
 | Code, docs, tests | Public GitHub repo (source-available, see [LICENSE](../LICENSE.md)) | Yes |
 | `.env` (secrets and machine settings) | Each laptop, copied by hand | **Never** |
-| `docker/compose.env` (Docker database passwords) | The HP | **Never** |
+| `docker/compose.env` (Docker database passwords) | The main laptop | **Never** |
 | `logs/` | JSON log files on each laptop (`LOG_DIR`) | Never |
 | `data/` | Local data and state, e.g. `data/state/alert_throttle.json` (`DATA_DIR`) | Never |
 | `drive_sync/` | Local folder for exports and backups | Never |
@@ -171,7 +180,7 @@ reach a database that isn't local unless the connection string forces TLS:
 - MongoDB: `mongodb+srv://`, or `mongodb://` with `tls=true`.
 
 **Local** means `localhost`, `127.0.0.1` or `::1` on every profile. A one-word hostname (a
-Docker service name) counts as local only on the `hp` and `cloud` profiles; on `thinkpad` it
+Docker service name) counts as local only on the `full` and `server` profiles; on `restricted` it
 could be any machine on the network, so it needs TLS.
 
 ### Secrets, masking and scanning
@@ -206,7 +215,7 @@ could be any machine on the network, so it needs TLS.
   limit, a write test that leaves nothing behind, and unexpected MongoDB collections (as a
   warning). Exit code 0 when all is well, 1 otherwise. A failure or a TLS refusal sends a
   critical alert; storage at 80% or more sends a warning.
-- **Docker on the HP (task 0.9):** `docker/compose.yaml` runs the same versions (postgres:18,
+- **Docker on the main laptop (task 0.9):** `docker/compose.yaml` runs the same versions (postgres:18,
   mongo:8.0), with credentials from the git-ignored `docker/compose.env`. Ports listen on the
   local machine only. On first start, init scripts create the same logins as in the cloud:
   the Postgres app login `mi_app` (password `PG_APP_PASSWORD`), and the MongoDB role

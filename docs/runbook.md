@@ -14,7 +14,7 @@ All commands run from `<repo folder>` with `uv run` in front.
 4. `uv run pytest` and `uv run pre-commit run --all-files`.
 5. `git push`, then check that CI is green.
 
-**Alternating laptops (ThinkPad and HP):** never work on both at once. Always pull first and
+**Alternating laptops (testing laptop and main laptop):** never work on both at once. Always pull first and
 push last, so the other laptop starts from the latest state. `.env` is not synced: each laptop
 has its own.
 
@@ -60,19 +60,21 @@ If several Postgres checks fail together (`databases`, `pg_migrations`, `data_fr
 
 ## Setting up a new Windows laptop
 
-1. Install Git, and [uv](https://docs.astral.sh/uv/getting-started/installation/) per user (no
-   admin needed). Optional: the GitHub CLI (`gh`), logged in with `gh auth login`.
+1. Install Git, and [uv](https://docs.astral.sh/uv/getting-started/installation/) per user.
+   Optional: the GitHub CLI (`gh`), logged in with `gh auth login`.
 2. Clone the repo into `<repo folder>` and open a terminal there.
 3. `uv sync` (installs Python 3.12 and the locked dependencies).
 4. `uv run pre-commit install` (lint, format, secret scan and notebook stripping on every
    commit).
 5. Create `.env`: copy `.env.example` to `.env`, then copy the values from the other laptop
    **securely**, with a USB drive or a password manager. **Never by email, chat or git.** Set
-   `APP_PROFILE` (`thinkpad` or `hp`). Leave settings empty when a default is fine.
+   `APP_PROFILE`: `restricted` on the testing laptop, `full` on the main laptop (see
+   [Laptops and profiles](architecture.md#laptops-and-profiles)). Leave settings empty when
+   a default is fine.
 6. Allow this laptop's network in the MongoDB access list (provider console).
 7. `uv run python -m market_intel.health`: everything should be OK or SKIP.
 
-### HP and Docker
+### Main laptop and Docker
 
 Completed in task 0.9.
 
@@ -84,7 +86,7 @@ Completed in task 0.9.
 | Postgres `mi_app` password (in `POSTGRES_URL`) | `.env` | `ALTER ROLE mi_app PASSWORD '...'` in the SQL editor |
 | MongoDB setup and app passwords (in `MONGODB_ADMIN_URI`, `MONGODB_URI`) | `.env` | The provider console's "Edit password" for that database user |
 | Gmail app password (`ALERT_EMAIL_APP_PASSWORD`) | `.env` | Delete it in the Google account and create a new one |
-| Docker database passwords | `docker/compose.env` (HP) | See task 0.9 |
+| Docker database passwords | `docker/compose.env` (main laptop) | See task 0.9 |
 | GitHub CLI login | The CLI's own credential store | `gh auth refresh`, or `gh auth logout` and log in again |
 | Colab secrets | Colab's Secrets panel | Edit them in the panel |
 
