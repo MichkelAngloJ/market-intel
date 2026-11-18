@@ -224,3 +224,8 @@
 - Decision: compute_check reports CPU, RAM, disk and any NVIDIA GPU (via nvidia-smi; no PyTorch yet) with a recommendation. The Colab template checks the GPU, clones the public repo, installs it and runs compute_check. Secrets come only from Colab's Secrets panel. How training data reaches Colab is decided in Phase 3.
 - Concern (planner): The project pins Python 3.12, so re-check Colab's Python version before Phase 3. Atlas only accepts known IP addresses, so Colab can't reach MongoDB.
 - Reason (owner): Accepted.
+
+## 2026-11-18 - Documentation structure
+- Decision: The README is a short entry point (what it is, the disclaimer, quick setup, daily commands, links). docs/architecture.md explains how the system works (Mermaid diagrams, where data lives, the security model, schema, MongoDB rules, the health check). docs/runbook.md explains how to operate it (the daily and two-laptop routines, fixing health-check problems, setting up a laptop, changing secrets, adding a collection). Every task updates the affected docs, and every task report lists the doc changes or says why none were needed. A docs test checks links, README length, Mermaid blocks and required sections.
+- Concern (planner): The tests check structure, not truth, so the docs can still drift from the code; every review checks the content too. Security details stay general because the repo is public.
+- Reason (owner): One place to understand the system (also for interviews), and a README that stays readable.
