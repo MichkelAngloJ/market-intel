@@ -214,3 +214,13 @@
 - Decision: Rights are granted per named collection instead of database-wide. Code reaches collections only through a helper that accepts names from the fixed list, and db_check warns about unexpected collections.
 - Concern (planner): The planner's first role design assumed that leaving out createCollection prevents new collections. That was wrong: MongoDB's insert right also creates a missing collection. The compose-smoke tests caught it by trying it, and permissions are now checked by behaviour, not only by their list. If mongo_setup hasn't run, the app could still create one of the four named collections; mongo_setup then adds its validator and indexes.
 - Reason (owner): Keep the guarantee that every collection goes through mongo_setup, enforced by the database, with code as a second check.
+
+## 2026-11-18 - Daily health check
+- Decision: One command (market_intel.health) runs every check (config, databases, migration level, MongoDB setup drift, MongoDB rights tested by behaviour, unexpected collections, disk, data freshness, Upstox token, LLM spend) and prints OK/WARN/FAIL/SKIP with reasons, or JSON for the Data Health page. Any FAIL exits 1 and sends one throttled critical alert. Parts not yet built show SKIP. It uses only the app logins.
+- Concern (planner): The rights probe uses only deletes that match nothing and one insert that should be refused. If the role were ever wrong, that insert could create a stray collection; health then reports it for manual removal.
+- Reason (owner): One thing to run each morning, reused later by the dashboard.
+
+## 2026-11-18 - Compute check and Colab template
+- Decision: compute_check reports CPU, RAM, disk and any NVIDIA GPU (via nvidia-smi; no PyTorch yet) with a recommendation. The Colab template checks the GPU, clones the public repo, installs it and runs compute_check. Secrets come only from Colab's Secrets panel. How training data reaches Colab is decided in Phase 3.
+- Concern (planner): The project pins Python 3.12, so re-check Colab's Python version before Phase 3. Atlas only accepts known IP addresses, so Colab can't reach MongoDB.
+- Reason (owner): Accepted.

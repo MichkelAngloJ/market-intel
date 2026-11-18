@@ -166,6 +166,49 @@ There is no function to change or delete an audit record, and the database refus
 
 **Leakage guard.** A prediction audit is refused if its `feature_cutoff` (the time of the latest data used) or the `published_at` of any news it used is later than the prediction time (`created_at`). This is an early check; the full leakage test comes in Phase 2.
 
+## Daily health check
+
+One command checks everything each morning:
+```
+uv run python -m market_intel.health          # table
+uv run python -m market_intel.health --json   # for scripts and the future Data Health page
+```
+
+Each check shows one of four statuses:
+- **OK:** all good.
+- **WARN:** needs attention soon, but the run still passes.
+- **FAIL:** broken. The command exits 1 and sends **one** critical alert ("Health check: N failing"), throttled like every alert. WARNs are only logged.
+- **SKIP:** not built or not configured yet.
+
+| Check | What it means |
+|---|---|
+| `config` | Profile and settings. A missing database setting = FAIL; missing alert settings = WARN |
+| `config_upstox`, `config_llm` | SKIP until those settings exist; WARN if only partly set |
+| `databases` | The same tests as `db_check` for Postgres and MongoDB. Unreachable, no TLS to a remote host, or a failed write test = FAIL; storage at 80% or more = WARN |
+| `pg_migrations` | The database's Alembic version compared with the code. Behind = WARN (run `alembic upgrade head`); a version the code doesn't know = FAIL |
+| `mongo_setup_drift` | Collections, validators and indexes compared with `schemas.py`. Any difference = WARN (run `mongo_setup`) |
+| `mongo_rights_probe` | The app login's rights, tested by trying them: a delete that matches nothing must be allowed everywhere except `prediction_audit`, and an insert into an unknown collection must be refused. A wrong right = FAIL; an unexpected error = WARN |
+| `unexpected_collections` | Collections not in `schemas.py` = WARN |
+| `laptop` | Free disk on the repo's drive (WARN below 10 GB, FAIL below 2 GB), plus the size of `logs/` and `data/` |
+| `data_freshness` | The latest `ingestion_runs` row. SKIP while there are no runs; WARN if the last run failed |
+| `upstox_token` | SKIP until Phase 1 |
+| `llm_spend` | This IST month's LLM spend against `LLM_MONTHLY_CAP_INR`. WARN at `LLM_WARN_PCT`, FAIL at 100% |
+
+Each check runs on its own: if one crashes, only that check FAILs (with masked error text) and the rest still run. Health uses only the app logins, never the admin logins. It writes nothing except `db_check`'s own write tests and the rights probe. The probe's deletes match nothing, and its insert should be refused. If that insert ever succeeds, health FAILs and names the stray collection to drop in Atlas. The JSON output holds no secrets; hosts may appear.
+
+## Compute check and Colab
+
+```
+uv run python -m market_intel.compute_check          # add --json for machines
+```
+Shows OS, Python, CPU cores, RAM, free disk and any NVIDIA GPU (found with `nvidia-smi`), plus a recommendation: "CPU only: use Colab for heavy training" or "GPU found: <name>, <VRAM>". It needs no `.env`.
+
+**Colab:** `notebooks/colab_template.ipynb` is a starter notebook. It checks the Python version and the GPU, clones this public repo, installs it with pip and runs `compute_check`.
+- **Secrets only through Colab's Secrets panel** (key icon). Never type or print them in cells.
+- The notebook is committed without outputs; nbstripout removes them on every commit.
+- The project needs Python 3.12. Colab's newest runtime may use another version: pick a Python 3.12 runtime under *Runtime > Change runtime type > Runtime version*.
+- How training data reaches Colab is decided in Phase 3. Atlas accepts only known IP addresses, so Colab can't reach MongoDB.
+
 ## Lint and tests
 
 ```
