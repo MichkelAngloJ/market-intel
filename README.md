@@ -81,7 +81,7 @@ uv run python -m market_intel.db_check
 ```
 For each database it shows reachable, host (never user, password or URL), server version, latency (median of 3 pings), TLS (checked client-side), storage vs the free limit, and a write test that leaves nothing behind. Exit code 0 when all is well, 1 otherwise. A failure sends a critical alert; storage at 80% or more sends a warning.
 
-**Encryption rule:** db_check refuses to connect, before sending anything, to a database that isn't on this machine unless the connection string forces TLS. For Postgres that means `sslmode=require`, `verify-ca` or `verify-full`. For MongoDB it means `mongodb+srv://`, or `mongodb://` with `tls=true`. A refusal exits 1 and sends a critical alert. Local hosts (`localhost`, `127.0.0.1`, `::1`, or a Docker service name without a dot) may connect without TLS.
+**Encryption rule:** every database connection (the app, db_check and migrations) refuses, before sending anything, to reach a database that isn't on this machine unless the connection string forces TLS. For Postgres that means `sslmode=require`, `verify-ca` or `verify-full`. For MongoDB it means `mongodb+srv://`, or `mongodb://` with `tls=true`. In db_check a refusal exits 1 and sends a critical alert. Local hosts may connect without TLS: `localhost`, `127.0.0.1` and `::1` always count as local. A one-word host such as a Docker service name counts as local only on the `hp` and `cloud` profiles.
 
 Free-tier limits (checked 2026-11-13): Neon 1 GB storage, compute sleeps after 5 minutes idle; Atlas M0 512 MB storage, about 100 operations/second. Set `PG_STORAGE_LIMIT_MB` / `MONGO_STORAGE_LIMIT_MB` if they change.
 
@@ -89,7 +89,33 @@ Free-tier limits (checked 2026-11-13): Neon 1 GB storage, compute sleeps after 5
 ```
 docker compose -f docker/compose.yaml --env-file docker/compose.env up -d
 ```
-Ports listen on 127.0.0.1 only. The Mongo app user gets readWrite on `market_intel` only. CI starts this stack and runs `db_check` against it whenever database files change.
+Ports listen on 127.0.0.1 only. The Mongo app user gets readWrite on `market_intel` only. On first start an init script creates the Postgres app login `mi_app` with `PG_APP_PASSWORD`. CI starts this stack whenever database files change, then runs the migrations, the permission tests and `db_check` against it.
+
+## Database schema and migrations
+
+The tables are defined in `src/market_intel/db/schema.py` (SQLAlchemy Core) and created by Alembic migrations in `migrations/`:
+
+| Table | Holds |
+|---|---|
+| `instruments` | One row per tradable symbol: exchange, segment, symbol, ISIN, Upstox key, sector |
+| `candles_daily` | Daily OHLCV per instrument and IST trading date, with source and raw/adjusted flag |
+| `candles_intraday` | 1-minute bars only (start time in UTC) |
+| `ingestion_runs` | Every data-loading run: job, status, rows written, masked error |
+| `data_gaps` | Missing data found per instrument and interval, and how it was resolved |
+| `llm_spend` | Every LLM call's cost; the view `v_llm_spend_monthly` sums it per IST month |
+
+Timestamps are UTC (`timestamptz`), trading days are IST dates, and prices are `numeric(14,4)`. For the same day, an Upstox candle may replace a yfinance one, never the reverse.
+
+**Two Postgres logins:**
+- `POSTGRES_ADMIN_URL`, the owner login, is used **only** by migrations.
+- `POSTGRES_URL` is the limited login `mi_app`, used by everything else. It can read and write rows, but it can't create, drop, alter or truncate tables, or change the migration version.
+
+**Migrations never run automatically.** Run them by hand:
+```
+uv run alembic upgrade head    # apply all migrations (uses POSTGRES_ADMIN_URL)
+uv run alembic current         # show the version the database is at
+```
+Downgrades drop tables and data, so they run **only in CI**, never on Neon or HP data. After changing `schema.py`, create a migration with `uv run alembic revision --autogenerate -m "..."` and review it by hand. CI runs `alembic check` to catch any drift.
 
 ## Lint and tests
 

@@ -164,3 +164,28 @@
 - Decision: db_check refuses, before connecting, any unencrypted connection to a non-local database host (exit 1 + critical alert). MongoDB TLS is read from the connection string first. The Docker test also runs when uv.lock, pyproject.toml, config.py or migrations change.
 - Concern (planner): None.
 - Reason (owner): Accepted the 0.4 review recommendations.
+
+## 2026-11-18 - Migrations: Alembic + SQLAlchemy Core
+- Decision: Alembic with SQLAlchemy 2 Core table definitions. Migrations live in migrations/ and run by hand with "alembic upgrade head" using the owner login (POSTGRES_ADMIN_URL), never automatically. CI proves every migration can be applied, undone and re-applied, and that code and migrations match (alembic check).
+- Concern (planner): Downgrades delete tables and data, so they run only in CI, never on Neon or HP data.
+- Reason (owner): Accepted the planner's recommendation.
+
+## 2026-11-18 - Plain Postgres, no TimescaleDB for now
+- Decision: Plain Postgres 18 with composite primary keys and BRIN time indexes. Tables are designed so they could become TimescaleDB hypertables later.
+- Concern (planner): Neon offers only TimescaleDB's Apache-2 features (no compression), so using it would make Neon and the HP behave differently. Revisit only if volumes demand it. This revises the 0.4 reason for picking Neon, which mentioned TimescaleDB.
+- Reason (owner): Accepted.
+
+## 2026-11-18 - Two Postgres logins
+- Decision: The owner login (POSTGRES_ADMIN_URL) is used only for migrations. mi_app (POSTGRES_URL) is used for everything else, with SELECT/INSERT/UPDATE/DELETE on tables only: no CREATE, DROP, TRUNCATE or ALTER. On Neon, mi_app was created through the SQL Editor, because roles created in the Neon console get admin rights (neon_superuser). On Docker, an init script creates it.
+- Concern (planner): Two passwords to manage; app code must never use the owner URL.
+- Reason (owner): Least privilege, as with MongoDB.
+
+## 2026-11-18 - Schema v1
+- Decision: instruments, candles_daily, candles_intraday (1-minute only), ingestion_runs, data_gaps, llm_spend, plus a monthly IST spend view. UTC timestamps; trading days as IST dates; prices numeric(14,4); every candle row records its source and whether its prices are raw or adjusted. Upstox rows replace yfinance rows for the same day, never the reverse.
+- Concern (planner): Splits and bonuses change past prices; adjustment handling is designed in Phase 1. Predictions, paper trades and features come in later migrations.
+- Reason (owner): Only what Phase 1 needs.
+
+## 2026-11-18 - Encryption check in every connection
+- Decision: The refusal of unencrypted connections to non-local hosts moved into the connection functions, so every caller is covered. Single-word hostnames count as local only on the hp and cloud profiles.
+- Concern (planner): None.
+- Reason (owner): Accepted the 0.5a review recommendations.
