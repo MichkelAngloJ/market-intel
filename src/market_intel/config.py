@@ -8,9 +8,9 @@ Loading order (highest priority first):
 
 Empty values (``KEY=``) count as "not set", so a copy of ``.env.example`` loads cleanly.
 
-Settings are split into groups (database, database_admin, upstox, llm, alerts). A group is
-only checked when the code that needs it calls :meth:`Settings.require`, so the app starts
-with just ``APP_PROFILE`` set.
+Settings are split into groups (database, database_admin, mongo_admin, upstox, llm,
+alerts). A group is only checked when the code that needs it calls :meth:`Settings.require`,
+so the app starts with just ``APP_PROFILE`` set.
 
 Secret values are ``SecretStr`` and never appear in repr, dumps or error messages.
 
@@ -46,7 +46,7 @@ LLM_ABSOLUTE_MAX_INR = 2000
 
 Profile = Literal["thinkpad", "hp", "cloud"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
-GroupName = Literal["database", "database_admin", "upstox", "llm", "alerts"]
+GroupName = Literal["database", "database_admin", "mongo_admin", "upstox", "llm", "alerts"]
 
 
 class ConfigError(Exception):
@@ -74,6 +74,15 @@ class DatabaseAdminSettings(_Group):
     """Owner login, used ONLY by migrations (alembic). App code uses DatabaseSettings."""
 
     postgres_admin_url: SecretStr
+    db_connect_timeout_s: int
+    app_profile: str
+
+
+class MongoAdminSettings(_Group):
+    """Setup login (readWrite + dbAdmin), used ONLY by mongo_setup. App code never uses it."""
+
+    mongodb_admin_uri: SecretStr
+    mongodb_db: str
     db_connect_timeout_s: int
     app_profile: str
 
@@ -115,6 +124,11 @@ _GROUPS: dict[str, tuple[type[_Group], tuple[str, ...], tuple[str, ...]]] = {
         DatabaseAdminSettings,
         ("postgres_admin_url",),
         ("db_connect_timeout_s", "app_profile"),
+    ),
+    "mongo_admin": (
+        MongoAdminSettings,
+        ("mongodb_admin_uri",),
+        ("mongodb_db", "db_connect_timeout_s", "app_profile"),
     ),
     "upstox": (
         UpstoxSettings,
@@ -160,6 +174,7 @@ class Settings(BaseSettings):
     postgres_url: SecretStr | None = None
     mongodb_uri: SecretStr | None = None
     postgres_admin_url: SecretStr | None = None  # migrations only
+    mongodb_admin_uri: SecretStr | None = None  # mongo_setup only
     mongodb_db: str = "market_intel"
     db_connect_timeout_s: int = Field(default=15, ge=1)
     pg_storage_limit_mb: int = Field(default=1024, ge=1)  # Neon free plan
@@ -215,6 +230,8 @@ class Settings(BaseSettings):
     def require(self, group: Literal["database"]) -> DatabaseSettings: ...
     @overload
     def require(self, group: Literal["database_admin"]) -> DatabaseAdminSettings: ...
+    @overload
+    def require(self, group: Literal["mongo_admin"]) -> MongoAdminSettings: ...
     @overload
     def require(self, group: Literal["upstox"]) -> UpstoxSettings: ...
     @overload
