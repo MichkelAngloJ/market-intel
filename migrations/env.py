@@ -82,7 +82,7 @@ def run_migrations_online() -> None:
         ),
         poolclass=pool.NullPool,
     )
-    print(f"Migrating on host: {parse_url(url).hosts}", file=sys.stderr)
+    print(f"Connecting to host: {parse_url(url).hosts}", file=sys.stderr)
     with engine.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata, **COMPARE_OPTS)
         with context.begin_transaction():
