@@ -49,6 +49,8 @@ def render(report: DbReport) -> str:
             f"  storage   : {storage}",
             f"  write test: {'ok' if report.write_ok else 'FAILED'}",
         ]
+    for warning in report.warnings:
+        lines.append(f"  warning   : {warning}")
     if report.error:
         lines.append(f"  error     : {report.error}")
     return "\n".join(lines)
@@ -118,6 +120,8 @@ def run(
             write_ok=report.write_ok,
             error=report.error,
         )
+        for warning in report.warnings:
+            log.warning("db_check_warning", database=name, warning=warning)
         print(render(report))
         alert_on(report, settings, sender)
         print()

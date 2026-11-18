@@ -20,6 +20,7 @@ from market_intel.db.common import (
     query_params,
     redactor,
 )
+from market_intel.mongo.access import collection, unexpected_collections
 
 APP_NAME = "market-intel"
 HEALTHCHECK_COLLECTION = "_healthcheck"
@@ -119,13 +120,25 @@ def check(
             used = stats.get("storageSize", 0) + stats.get("indexSize", 0)
             report.used_mb = round(used / 1024 / 1024, 1)
             report.write_ok = _write_test(database)
+            report.warnings += _collection_warnings(database)
     except Exception as exc:
         report.error = f"{type(exc).__name__}: {redact(str(exc)).strip()}"
     return report
 
 
+def _collection_warnings(database) -> list[str]:
+    """Warn (don't fail) about collections that aren't in the list in schemas.py."""
+    try:
+        extra = unexpected_collections(database.list_collection_names())
+    except Exception as exc:
+        return [f"could not list collections ({type(exc).__name__})"]
+    if not extra:
+        return []
+    return [f"unexpected collections (not created by mongo_setup): {', '.join(extra)}"]
+
+
 def _write_test(database) -> bool:
-    coll = database[HEALTHCHECK_COLLECTION]
+    coll = collection(database, HEALTHCHECK_COLLECTION)
     doc_id = ObjectId()
     try:
         coll.insert_one({"_id": doc_id, "at": datetime.now(UTC), "note": "ok"})

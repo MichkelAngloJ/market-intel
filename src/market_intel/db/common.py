@@ -8,7 +8,7 @@ from __future__ import annotations
 import statistics
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, unquote
 
 MASK = "***"
@@ -40,6 +40,7 @@ class DbReport:
     write_ok: bool | None = None
     error: str | None = None
     refused: bool = False  # True when the check refused to connect without TLS
+    warnings: list[str] = field(default_factory=list)  # shown, logged; don't fail the check
 
     @property
     def used_pct(self) -> float | None:

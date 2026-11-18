@@ -5,15 +5,16 @@ These two functions are the ONLY code that writes audit records:
 - :func:`record_prediction` inserts a new audit once (outcome empty, status "pending").
 - :func:`record_outcome` adds the outcome once (status "pending" -> "filled").
 
-There is deliberately no function to change or delete an audit. This rule is enforced in
-code, not by MongoDB rights: the app login (role mi_app_rw) can technically update and remove
-documents in every collection. A stricter per-collection role can be added later.
+There is deliberately no function to change or delete an audit. Deletes are also refused by
+the database: the app role mi_app_rw has no remove right on prediction_audit. It does have
+update (needed to add the outcome), so "only the outcome changes, once" is enforced in code.
 """
 
 from __future__ import annotations
 
 from pymongo.database import Database
 
+from market_intel.mongo import access
 from market_intel.mongo.models import Outcome, PredictionAudit
 from market_intel.mongo.schemas import PREDICTION_AUDIT
 
@@ -32,7 +33,7 @@ def record_prediction(db: Database, audit: PredictionAudit) -> str:
     """
     if audit.outcome is not None or audit.outcome_status != "pending":
         raise AuditError("a new audit record must have outcome_status 'pending' and no outcome")
-    db[COLLECTION].insert_one(audit.to_document())
+    access.collection(db, COLLECTION).insert_one(audit.to_document())
     return audit.prediction_id
 
 
@@ -42,7 +43,7 @@ def record_outcome(db: Database, prediction_id: str, outcome: Outcome) -> None:
     The filter matches only a *pending* record, so a second call (or an unknown id) changes
     nothing and raises AuditError.
     """
-    result = db[COLLECTION].update_one(
+    result = access.collection(db, COLLECTION).update_one(
         {"prediction_id": prediction_id, "outcome_status": "pending"},
         {"$set": {"outcome": outcome.model_dump(), "outcome_status": "filled"}},
     )
