@@ -8,9 +8,9 @@ Loading order (highest priority first):
 
 Empty values (``KEY=``) count as "not set", so a copy of ``.env.example`` loads cleanly.
 
-Settings are split into groups (database, upstox, llm, alerts). A group is only checked when
-the code that needs it calls :meth:`Settings.require`, so the app starts with just
-``APP_PROFILE`` set.
+Settings are split into groups (database, database_admin, upstox, llm, alerts). A group is
+only checked when the code that needs it calls :meth:`Settings.require`, so the app starts
+with just ``APP_PROFILE`` set.
 
 Secret values are ``SecretStr`` and never appear in repr, dumps or error messages.
 
@@ -46,7 +46,7 @@ LLM_ABSOLUTE_MAX_INR = 2000
 
 Profile = Literal["thinkpad", "hp", "cloud"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
-GroupName = Literal["database", "upstox", "llm", "alerts"]
+GroupName = Literal["database", "database_admin", "upstox", "llm", "alerts"]
 
 
 class ConfigError(Exception):
@@ -67,6 +67,15 @@ class DatabaseSettings(_Group):
     db_connect_timeout_s: int
     pg_storage_limit_mb: int
     mongo_storage_limit_mb: int
+    app_profile: str  # decides whether Docker service names count as local hosts
+
+
+class DatabaseAdminSettings(_Group):
+    """Owner login, used ONLY by migrations (alembic). App code uses DatabaseSettings."""
+
+    postgres_admin_url: SecretStr
+    db_connect_timeout_s: int
+    app_profile: str
 
 
 class UpstoxSettings(_Group):
@@ -94,7 +103,18 @@ _GROUPS: dict[str, tuple[type[_Group], tuple[str, ...], tuple[str, ...]]] = {
     "database": (
         DatabaseSettings,
         ("postgres_url", "mongodb_uri"),
-        ("mongodb_db", "db_connect_timeout_s", "pg_storage_limit_mb", "mongo_storage_limit_mb"),
+        (
+            "mongodb_db",
+            "db_connect_timeout_s",
+            "pg_storage_limit_mb",
+            "mongo_storage_limit_mb",
+            "app_profile",
+        ),
+    ),
+    "database_admin": (
+        DatabaseAdminSettings,
+        ("postgres_admin_url",),
+        ("db_connect_timeout_s", "app_profile"),
     ),
     "upstox": (
         UpstoxSettings,
@@ -139,6 +159,7 @@ class Settings(BaseSettings):
     # database
     postgres_url: SecretStr | None = None
     mongodb_uri: SecretStr | None = None
+    postgres_admin_url: SecretStr | None = None  # migrations only
     mongodb_db: str = "market_intel"
     db_connect_timeout_s: int = Field(default=15, ge=1)
     pg_storage_limit_mb: int = Field(default=1024, ge=1)  # Neon free plan
@@ -192,6 +213,8 @@ class Settings(BaseSettings):
 
     @overload
     def require(self, group: Literal["database"]) -> DatabaseSettings: ...
+    @overload
+    def require(self, group: Literal["database_admin"]) -> DatabaseAdminSettings: ...
     @overload
     def require(self, group: Literal["upstox"]) -> UpstoxSettings: ...
     @overload
