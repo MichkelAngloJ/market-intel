@@ -254,6 +254,12 @@ class Settings(BaseSettings):
         return view(**{name: getattr(self, name) for name in required + optional})
 
 
+def required_fields(group: GroupName) -> list[str]:
+    """Env var names of the settings ``group`` needs."""
+    _, required, _ = _group_spec(group)
+    return [name.upper() for name in required]
+
+
 def _group_spec(group: str) -> tuple[type[_Group], tuple[str, ...], tuple[str, ...]]:
     if group not in _GROUPS:
         raise ConfigError(f"Unknown settings group '{group}'. Allowed: {', '.join(_GROUPS)}")
