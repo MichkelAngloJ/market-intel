@@ -1,5 +1,11 @@
 # market-intel — Personal Market Intelligence (India)
 
+> Personal learning project. Not investment advice. The author is not a
+> SEBI-registered investment adviser or research analyst. Nothing here is a
+> recommendation to buy or sell any security; do not trade based on it. This
+> repository contains code and documentation only: no market data, predictions or
+> signals.
+
 Personal system that predicts, explains (SHAP + audit trail) and validates (paper trading) signals for Indian markets: stocks first, then IPOs, then mutual funds.
 
 **Signals only, never real orders. Not investment advice.**
@@ -24,6 +30,10 @@ Personal system that predicts, explains (SHAP + audit trail) and validates (pape
    uv run pre-commit install
    ```
 4. Copy `.env.example` to `.env` and fill in values locally.
+
+## Using this code
+
+Run it with your own data and your own API keys. The repo ships no data: no market data, predictions, signals, model files or notebook outputs. `.gitignore`, nbstripout and a safety test keep them out. Results stay on the machine that produced them.
 
 ## Configuration
 
