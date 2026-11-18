@@ -86,3 +86,22 @@ def test_env_refuses_unencrypted_non_local_admin_url(monkeypatch, capsys):
     assert FAKE_PW not in str(exc.value)
     out = capsys.readouterr()
     assert FAKE_PW not in out.out + out.err
+
+
+# --- 0003: updated_at trigger and TEMP grant --------------------------------------------------
+
+
+def test_0003_trigger_and_temp_grant_in_offline_sql():
+    sql = offline_sql()
+    assert "CREATE FUNCTION set_updated_at() RETURNS trigger" in sql
+    assert "BEFORE UPDATE ON instruments" in sql
+    assert "'GRANT TEMP ON DATABASE ' || quote_ident(current_database())" in sql
+    assert "|| ' TO mi_app'" in sql
+    assert "UPDATE alembic_version SET version_num='0003'" in sql
+
+
+def test_0003_is_head_and_downgrade_keeps_role():
+    versions = REPO_ROOT / "migrations" / "versions"
+    text = (versions / "0003_updated_at_trigger_and_temp_grant.py").read_text(encoding="utf-8")
+    downgrade = text.split("def downgrade", 1)[1].upper()
+    assert "REVOKE" in downgrade and "DROP ROLE" not in downgrade
