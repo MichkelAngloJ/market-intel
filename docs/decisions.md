@@ -229,3 +229,8 @@
 - Decision: The README is a short entry point (what it is, the disclaimer, quick setup, daily commands, links). docs/architecture.md explains how the system works (Mermaid diagrams, where data lives, the security model, schema, MongoDB rules, the health check). docs/runbook.md explains how to operate it (the daily and two-laptop routines, fixing health-check problems, setting up a laptop, changing secrets, adding a collection). Every task updates the affected docs, and every task report lists the doc changes or says why none were needed. A docs test checks links, README length, Mermaid blocks and required sections.
 - Concern (planner): The tests check structure, not truth, so the docs can still drift from the code; every review checks the content too. Security details stay general because the repo is public.
 - Reason (owner): One place to understand the system (also for interviews), and a README that stays readable.
+
+## 2026-11-18 - Device-neutral names
+- Decision: Profiles are named by what a machine may do: restricted (testing; cloud databases; no broker keys, rule R1), full (main work; Docker databases; broker keys allowed), server (later hosting). Device names and machine details were removed from code, docs and older decision entries (each edited entry is marked as redacted), and a test blocks device names from coming back.
+- Concern (planner): The old wording remains in the public git history; rewriting history with a force-push isn't worth the risk for laptop names. Naming profiles after devices leaked them once the repo went public; the planner should have flagged it then.
+- Reason (owner): Third parties don't need to know which machines I use.
