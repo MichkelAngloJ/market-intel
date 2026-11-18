@@ -144,3 +144,23 @@
 - Decision: docker/compose.yaml with postgres 18 and mongo 8.0 (same as the cloud), ports on 127.0.0.1 only, memory limits, health checks, multi-arch images. Credentials in the git-ignored docker/compose.env. Least-privilege app user. A CI job starts the stack and runs db_check whenever database files change.
 - Concern (planner): Uses CI minutes on a private repo, so the job runs only on relevant changes. The TimescaleDB image decision is left to task 0.5.
 - Reason (owner): Verify the HP setup now, without Docker on the ThinkPad.
+
+## 2026-11-13 - Planner review of the public repo
+- Decision: The repo stays public (owner's decision). The concerns in the entry "Public repo under PolyForm Strict 1.0.0" were written without planner review; the planner's concerns are recorded here.
+- Concern (planner): (1) Publishing current stock-specific predictions or signals could count as unregistered investment advice or research under SEBI rules, even with a disclaimer. (2) Bots scan public repos within minutes, so any leaked key must be changed immediately (GitHub secret scanning and push protection are on). (3) Security details in the docs are public, so they are kept general from now on.
+- Reason (owner): Share code and documentation as a learning project; others run it with their own data.
+
+## 2026-11-13 - SEBI and data-use rules for this project
+- Decision: The public repo holds code and documentation only. No market data, predictions, signals, model files, notebook outputs or paper-trading results are ever committed (enforced by .gitignore, nbstripout and a safety test). The dashboard runs only on my own laptop with no other users. Predicted-vs-actual results are shown only in person (e.g. interviews), and nothing public claims accuracy or returns. Disclaimer in the README (and the dashboard later). Building and testing models for my own use needs no SEBI permission.
+- Concern (planner): SEBI looks at substance, not labels: a disclaimer does not turn a recommendation into education. Unregistered education may only use price data at least 30 days old (SEBI circular, May 2026; confirm on sebi.gov.in). Broker and exchange data can't be redistributed. Automated real orders later would need the broker's algo approval under SEBI's retail algo framework. Not legal advice.
+- Reason (owner): Learning project and personal use only.
+
+## 2026-11-13 - Correction: CI minutes
+- Decision: The 0.4 entry's concern "Uses CI minutes on a private repo" no longer applies; the repo is public, so standard GitHub-hosted runners are free.
+- Concern (planner): If the repo goes private again, the concern returns.
+- Reason (owner): Keep the log accurate.
+
+## 2026-11-13 - Database encryption rule
+- Decision: db_check refuses, before connecting, any unencrypted connection to a non-local database host (exit 1 + critical alert). MongoDB TLS is read from the connection string first. The Docker test also runs when uv.lock, pyproject.toml, config.py or migrations change.
+- Concern (planner): None.
+- Reason (owner): Accepted the 0.4 review recommendations.

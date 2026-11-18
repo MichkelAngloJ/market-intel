@@ -81,6 +81,8 @@ uv run python -m market_intel.db_check
 ```
 For each database it shows reachable, host (never user, password or URL), server version, latency (median of 3 pings), TLS (checked client-side), storage vs the free limit, and a write test that leaves nothing behind. Exit code 0 when all is well, 1 otherwise. A failure sends a critical alert; storage at 80% or more sends a warning.
 
+**Encryption rule:** db_check refuses to connect, before sending anything, to a database that isn't on this machine unless the connection string forces TLS. For Postgres that means `sslmode=require`, `verify-ca` or `verify-full`. For MongoDB it means `mongodb+srv://`, or `mongodb://` with `tls=true`. A refusal exits 1 and sends a critical alert. Local hosts (`localhost`, `127.0.0.1`, `::1`, or a Docker service name without a dot) may connect without TLS.
+
 Free-tier limits (checked 2026-11-13): Neon 1 GB storage, compute sleeps after 5 minutes idle; Atlas M0 512 MB storage, about 100 operations/second. Set `PG_STORAGE_LIMIT_MB` / `MONGO_STORAGE_LIMIT_MB` if they change.
 
 **HP (from Dec 2026):** the same versions in Docker. Copy `docker/compose.env.example` to `docker/compose.env`, fill in long random values, then:
@@ -98,7 +100,7 @@ uv run pytest
 uv run pre-commit run --all-files
 ```
 
-CI (GitHub Actions) runs `uv sync --locked`, pre-commit and pytest on every push and pull request to `main`.
+CI (GitHub Actions) runs `uv sync --locked`, pre-commit and pytest on every push and pull request to `main`. pre-commit includes nbstripout, which strips outputs from notebooks before they are committed.
 
 ## Machine plan
 
