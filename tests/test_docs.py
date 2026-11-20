@@ -13,8 +13,25 @@ ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
 ARCHITECTURE = ROOT / "docs" / "architecture.md"
 RUNBOOK = ROOT / "docs" / "runbook.md"
-DOCS = [README, ARCHITECTURE, RUNBOOK]
+SPEC = ROOT / "docs" / "spec.md"
+WORKFLOW = ROOT / "docs" / "workflow.md"
+PROGRESS = ROOT / "docs" / "progress.md"
+CLAUDE_MD = ROOT / "CLAUDE.md"
+DOCS = [README, ARCHITECTURE, RUNBOOK, SPEC, WORKFLOW, PROGRESS, CLAUDE_MD]
 README_MAX_LINES = 120
+CLAUDE_MD_MAX_LINES = 150
+
+PHASE_HEADINGS = [
+    "### Phase 1 — Stock data pipeline",
+    "### Phase 2 — Events and features",
+    "### Phase 3 — Stock models",
+    "### Phase 4 — Paper trading page",
+    "### Phase 5 — Online learning and anomaly detection",
+    "### Phase 6 — IPO module",
+    "### Phase 7 — Mutual funds module",
+    "### Phase 8 — Agent layer",
+    "### Phase 9 — Optional: reinforcement learning experiment",
+]
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 
@@ -38,18 +55,61 @@ REQUIRED_HEADINGS = {
         "## Compute and Colab",
         "## Testing and CI",
         "## Planned (later phases)",
-        *[f"### Phase {n}" for n in range(1, 9)],
+        *PHASE_HEADINGS,
     ],
     RUNBOOK: [
         "## Daily routine",
         "## Reading the health output",
         "## Setting up a new Windows laptop",
-        "### Main laptop and Docker",
+        "### Main laptop setup",
         "## Secrets",
         "## Migrations",
         "## Adding a MongoDB collection",
         "## Common problems",
         "## Changing the project",
+    ],
+    SPEC: [
+        "# Project spec",
+        "## Goal",
+        "## Roles",
+        "## Infrastructure",
+        "## Cost",
+        "## Data sources",
+        "## Phases (build + learn)",
+        "## Features and labels",
+        "## Modeling rules",
+        "## Paper trading",
+        "## Online learning",
+        "## Logging and audit",
+        "## Safety and regulation",
+        "## Interface",
+        "## Definition of done (per phase)",
+    ],
+    WORKFLOW: [
+        "# Workflow",
+        "## Who does what",
+        "## Shared memory is the repo",
+        "## Steps per task",
+        "## Task prompt template",
+        "## Report format",
+        "## Decision entry format",
+        "## Planner rules",
+        "## Two laptops",
+    ],
+    PROGRESS: [
+        "# Progress",
+        "## Current",
+        "## Tasks",
+        "## State",
+        "## Carry-forward items",
+    ],
+    CLAUDE_MD: [
+        "# Instructions for Claude Code",
+        "## Start of every session",
+        "## Hard rules",
+        "## End of every task",
+        "## Commands",
+        "## Windows note",
     ],
 }
 
@@ -85,7 +145,17 @@ def relative_links(path: Path) -> list[str]:
 
 def test_readme_links_the_docs_and_license():
     links = relative_links(README)
-    for target in ("docs/architecture.md", "docs/runbook.md", "docs/decisions.md", "LICENSE.md"):
+    targets = (
+        "docs/architecture.md",
+        "docs/runbook.md",
+        "docs/decisions.md",
+        "docs/spec.md",
+        "docs/workflow.md",
+        "docs/progress.md",
+        "CLAUDE.md",
+        "LICENSE.md",
+    )
+    for target in targets:
         assert any(link.split("#")[0] == target for link in links), f"README misses {target}"
         assert (ROOT / target).is_file(), f"{target} does not exist"
 
@@ -103,6 +173,13 @@ def test_relative_links_point_to_existing_files_and_headings(doc):
 def test_readme_is_short():
     lines = text(README).splitlines()
     assert len(lines) <= README_MAX_LINES, f"README has {len(lines)} lines"
+
+
+def test_claude_md_exists_and_is_short():
+    # Claude Code loads CLAUDE.md into every session, so it must exist and stay short.
+    assert CLAUDE_MD.is_file(), "CLAUDE.md is missing at the repo root"
+    lines = text(CLAUDE_MD).splitlines()
+    assert len(lines) <= CLAUDE_MD_MAX_LINES, f"CLAUDE.md has {len(lines)} lines"
 
 
 @pytest.mark.parametrize("doc", DOCS, ids=lambda p: p.name)
