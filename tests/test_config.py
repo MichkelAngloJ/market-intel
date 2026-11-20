@@ -311,3 +311,45 @@ def test_alert_settings_defaults_and_bounds(monkeypatch):
     assert s.log_dir.name == "logs" and s.log_dir.is_absolute()
     with pytest.raises(ConfigError, match="ALERT_THROTTLE_HOURS"):
         load_with(monkeypatch, ALERT_THROTTLE_HOURS="-1")
+
+
+# --- task 0.9b: BACKUP_DIR must be outside the repo --------------------------------------
+
+
+def test_backup_dir_default_is_next_to_the_repo(tmp_path, monkeypatch):
+    s = load_with(monkeypatch, APP_PROFILE="full")
+    assert s.backup_dir == (tmp_path.parent / "market-intel-backups").resolve()
+    assert not config.is_inside(s.backup_dir, tmp_path)
+
+
+def test_backup_dir_relative_outside_the_repo_is_allowed(tmp_path, monkeypatch):
+    s = load_with(monkeypatch, APP_PROFILE="full", BACKUP_DIR="../elsewhere")
+    assert s.backup_dir == (tmp_path.parent / "elsewhere").resolve()
+
+
+@pytest.mark.parametrize("inside", ["backups", ".", "data/backups", "../{repo}/backups"])
+def test_backup_dir_inside_the_repo_is_refused(tmp_path, monkeypatch, inside):
+    value = inside.format(repo=tmp_path.name)
+    with pytest.raises(ConfigError, match="BACKUP_DIR must be outside the repo"):
+        load_with(monkeypatch, APP_PROFILE="full", BACKUP_DIR=value)
+
+
+def test_backup_dir_absolute_path_inside_the_repo_is_refused(tmp_path, monkeypatch):
+    for value in (tmp_path, tmp_path / "backups", tmp_path / "a" / ".." / "b"):
+        with pytest.raises(ConfigError, match="BACKUP_DIR"):
+            load_with(monkeypatch, APP_PROFILE="restricted", BACKUP_DIR=str(value))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows paths are case-insensitive")
+def test_backup_dir_inside_the_repo_in_other_case_is_refused(tmp_path, monkeypatch):
+    with pytest.raises(ConfigError, match="BACKUP_DIR"):
+        load_with(
+            monkeypatch, APP_PROFILE="full", BACKUP_DIR=str(Path(str(tmp_path).upper()) / "b")
+        )
+
+
+def test_real_repo_default_backup_dir_is_outside_the_repo(monkeypatch):
+    monkeypatch.setattr(config, "REPO_ROOT", REAL_REPO)
+    s = load_with(monkeypatch, APP_PROFILE="full")
+    assert not config.is_inside(s.backup_dir, REAL_REPO)
+    assert s.backup_dir.parent == REAL_REPO.parent

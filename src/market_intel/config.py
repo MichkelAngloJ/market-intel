@@ -172,6 +172,9 @@ class Settings(BaseSettings):
     display_timezone: str = "Asia/Kolkata"
     data_dir: Path = Path("data")
     log_dir: Path = Path("logs")
+    # Backups are data: the folder must be outside the repo (checked below). Default: a
+    # market-intel-backups folder next to the repo folder.
+    backup_dir: Path = Path("../market-intel-backups")
 
     # database
     postgres_url: SecretStr | None = None
@@ -215,12 +218,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _resolve_and_check(self) -> Settings:
-        for name in ("data_dir", "log_dir"):
+        for name in ("data_dir", "log_dir", "backup_dir"):
             path: Path = getattr(self, name)
             if not path.is_absolute():
                 # frozen model: bypass the setattr guard for these derived values
                 object.__setattr__(self, name, (REPO_ROOT / path).resolve())
         # ConfigError is not a ValueError, so pydantic lets it through unwrapped.
+        if is_inside(self.backup_dir, REPO_ROOT):
+            raise ConfigError(
+                "BACKUP_DIR must be outside the repo folder: backups are data and must never be "
+                "committed. Leave it empty for the default (market-intel-backups next to the repo)."
+            )
         _check_rules(self)
         return self
 
@@ -261,6 +269,13 @@ def required_fields(group: GroupName) -> list[str]:
     """Env var names of the settings ``group`` needs."""
     _, required, _ = _group_spec(group)
     return [name.upper() for name in required]
+
+
+def is_inside(path: Path, root: Path) -> bool:
+    """True if ``path`` is ``root`` or anywhere below it (case-insensitive on Windows)."""
+    resolved = Path(os.path.normcase(path.resolve()))
+    base = Path(os.path.normcase(root.resolve()))
+    return resolved == base or resolved.is_relative_to(base)
 
 
 def _group_spec(group: str) -> tuple[type[_Group], tuple[str, ...], tuple[str, ...]]:
