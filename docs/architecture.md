@@ -6,8 +6,9 @@ How market-intel works today, and what is planned. For day-to-day operation see 
 ## Overview
 
 A command-line project in Python 3.12, run on one of two laptops (synced through git), with a
-Postgres database and a MongoDB database. Today both databases are free cloud services; on the
-main laptop they will run in Docker. Nothing is scheduled yet: every command runs only when started.
+Postgres database and a MongoDB database. The testing laptop uses free cloud databases; the main
+laptop runs both in local Docker containers (since task 0.9b). Nothing is scheduled yet: every
+command runs only when started.
 
 ### Components now
 
@@ -25,10 +26,11 @@ flowchart LR
     CLI --> ALERTS[Alerts]
     ALERTS --> SMTP[Gmail SMTP]
     SMTP --> INBOX[Inbox]
-    CLI -->|app login| PG[(Postgres - cloud now - Docker on main laptop later)]
+    CLI -->|app login| PG[(Postgres - cloud on testing laptop - Docker on main laptop)]
     CLI -->|owner login - migrations only| PG
-    CLI -->|app login| MDB[(MongoDB - cloud now - Docker on main laptop later)]
+    CLI -->|app login| MDB[(MongoDB - cloud on testing laptop - Docker on main laptop)]
     CLI -->|setup login - mongo_setup only| MDB
+    CLI -->|backup - full profile only| BAK[Backup folder outside the repo]
     CLI -->|git push and pull| GH[GitHub public repo]
     GH --> CI[ci.yml checks]
     GH --> SMOKE[compose-smoke with Docker databases]
@@ -81,6 +83,7 @@ flowchart LR
 | `python -m market_intel.alerts --test` | Sends one test alert email (`--dry-run` builds it only) |
 | `alembic upgrade head` | Applies Postgres migrations (owner login) |
 | `python -m market_intel.mongo_setup` | Creates or updates MongoDB collections (setup login) |
+| `python -m market_intel.backup` | Backs up the local Docker databases (`--verify`: restore test); `full` profile only |
 
 All are run with `uv run` in front.
 
@@ -91,12 +94,15 @@ Each laptop's `.env` sets `APP_PROFILE`, named by what that machine may do:
 | Profile | Used on | Databases | Broker keys | One-word hosts (Docker service names) |
 |---|---|---|---|---|
 | `restricted` | The testing laptop (now): testing and validation | Cloud only (it can't run Docker) | Not allowed (rule R1) | Not local: need TLS |
-| `full` | The main laptop (from about 21 Nov 2026): main work | Docker allowed | Allowed | Local |
+| `full` | The main laptop (from about 21 Nov 2026): main work | Local Docker (since 0.9b) | Allowed | Local |
 | `server` | Later hosting | Docker allowed | Allowed | Local |
 
 - The two laptops are used **alternately**, synced through git (see the
   [runbook](runbook.md#daily-routine)).
-- The main laptop's Docker setup is task 0.9.
+- The main laptop runs Postgres and MongoDB in local Docker containers (see
+  [Databases](#databases) and the runbook's
+  [Local Docker databases](runbook.md#local-docker-databases)). The testing laptop stays on the
+  cloud databases until it is handed back.
 - **Go live** only after validation.
 
 ## Configuration and profiles
@@ -138,6 +144,15 @@ see `src/market_intel/config.py`.
 | `drive_sync/` | Local folder for exports and backups | Never |
 | Postgres tables | The Postgres database (see [Postgres schema v1](#postgres-schema-v1)) | No |
 | MongoDB collections | The MongoDB database (see [MongoDB](#mongodb)) | No |
+| Local database files (`full` profile) | Docker named volumes `market-intel_pgdata` and `market-intel_mongodata` on the main laptop | Never |
+| Backups (`full` profile) | `BACKUP_DIR`: by default a `market-intel-backups` folder **next to** the repo folder; config refuses a folder inside the repo | Never |
+
+**On the `full` profile** the databases are local: their data lives in the two Docker volumes
+(containers are disposable; `docker compose down` keeps the volumes, `down -v` deletes them).
+Once ingestion starts these volumes hold the only copy of the data, so backups are taken with
+`market_intel.backup` and copied off the laptop (see the runbook's
+[Local Docker databases](runbook.md#local-docker-databases)). On the `restricted` profile the
+databases are the cloud services.
 
 **Never in git:** market data, predictions, signals, model files, paper-trading results and
 notebook outputs. `.gitignore` blocks the folders (`data/`, `models/`, `mlruns/`, `logs/`,
@@ -171,6 +186,12 @@ killAnyCursor. The app login can't create or drop collections or change indexes 
 validators. Rights are per collection because MongoDB's insert right also creates a missing
 collection; a database-wide insert would let a typo create a collection with no validator.
 
+The local Docker databases have the same two logins per database, created by the init scripts
+on first start. `market_intel.backup` uses none of them: it runs the dump and restore tools
+**inside** the containers with the containers' own admin logins (the Postgres superuser over the
+container's local socket; the MongoDB root user, whose password goes into a temporary config
+file inside the container). No password appears on a command line or in the output.
+
 ### TLS refusal
 
 Every connection (the app, `db_check`, `health`, migrations and `mongo_setup`) goes through
@@ -200,6 +221,17 @@ could be any machine on the network, so it needs TLS.
 
 - The repo holds **code and documentation only**: no market data, predictions, signals, model
   files, notebook outputs or paper-trading results.
+- **Commit emails:** every commit must use the GitHub no-reply address (ending in
+  `@users.noreply.github.com`), so no personal address is published.
+  - Locally, the pre-commit hook `commit-email-guard` (`scripts/commit_email_guard.py`) blocks
+    a commit whose author or committer email is anything else; it prints emails masked only.
+  - In CI the hook is skipped; instead a test in `tests/test_repo_safety.py` checks every
+    commit of the full history (commits made on github.com may have GitHub's own web-commit
+    address as committer).
+  - GitHub's own push block covers only addresses registered on the account, so the
+    repo-side guard is still needed.
+- Backups and dumps are data: they go to a folder outside the repo (`BACKUP_DIR`), never into
+  git.
 - The dashboard will run only on the owner's laptop with no other users; predicted-vs-actual
   results are shown only in person. Nothing public claims accuracy or returns.
 - The disclaimer is in the README and in `market_intel.disclaimer.DISCLAIMER` (for the
@@ -362,6 +394,18 @@ Data Health page (no secrets; hosts may appear).
     type > Runtime version* until Phase 3 decides.
   - How training data reaches Colab is decided in Phase 3. The cloud MongoDB accepts only
     allow-listed networks, so Colab can't reach it.
+- **Main laptop (`full` profile, since 0.9b):** the same versions, Postgres 18 and MongoDB 8.0,
+  in Docker (`docker/compose.yaml`, passwords in `docker/compose.env`). Ports are bound to
+  127.0.0.1 only and each container is capped at 2 GB of memory. The databases started fresh,
+  were migrated to head (0003) and set up with `mongo_setup`; the app connects with the same
+  limited logins as in the cloud.
+  - **Backups:** `python -m market_intel.backup` writes one Postgres dump (`pg_dump`, custom
+    format) and one MongoDB archive (`mongodump`, gzip) to `BACKUP_DIR`, named by UTC
+    timestamp, and keeps the newest 7 of each. `--verify` restores the newest backup into
+    throwaway databases (`market_intel_restore_test`), compares the row count of every table
+    and collection with the source, and drops them again.
+  - Whether the cloud databases are deleted or kept as an off-site backup once the testing
+    laptop is handed back is decided in 0.10.
 
 ## Testing and CI
 
@@ -369,9 +413,10 @@ Data Health page (no secrets; hosts may appear).
   tries a real database or SMTP connection, and every test gets an empty `.env`.
 - **Integration tests** (`tests/integration/`, marker `integration`) talk to real databases.
   They are skipped unless `RUN_INTEGRATION=1`, which only compose-smoke sets.
-- **`ci.yml`** runs on every push and pull request to `main`: `uv sync --locked`,
-  `pre-commit run --all-files` (ruff, ruff format, detect-secrets, nbstripout, file checks)
-  and pytest.
+- **`ci.yml`** runs on every push and pull request to `main`: it checks out the full history
+  (`fetch-depth: 0`, for the commit-email test), then `uv sync --locked`,
+  `pre-commit run --all-files` (ruff, ruff format, detect-secrets, nbstripout, file checks;
+  the commit-email guard skips itself in CI) and pytest.
 - **`compose-smoke.yml`** starts Postgres 18 and MongoDB 8.0 in Docker with throwaway
   passwords, then runs `mongo_setup` twice (the second run must change nothing), the
   migrations up, down to base and up again, `alembic check`, the integration tests, `db_check`

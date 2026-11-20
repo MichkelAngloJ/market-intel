@@ -9,11 +9,16 @@ All commands run from `<repo folder>` with `uv run` in front.
 
 1. `git pull`
 2. Read [docs/progress.md](progress.md): the current task and the carry-forward items.
-3. `uv run python -m market_intel.health` and fix anything that isn't OK or SKIP (see
+3. **On the `full` profile (main laptop):** start Docker Desktop, then the local databases
+   (`docker compose -f docker/compose.yaml --env-file docker/compose.env up -d --wait`; see
+   [Local Docker databases](#local-docker-databases)).
+4. `uv run python -m market_intel.health` and fix anything that isn't OK or SKIP (see
    [Reading the health output](#reading-the-health-output)).
-4. Work.
-5. `uv run pytest` and `uv run pre-commit run --all-files`.
-6. `git push`, then check that CI is green.
+5. Work.
+6. `uv run pytest` and `uv run pre-commit run --all-files`.
+7. `git push`, then check that CI is green.
+8. **On the `full` profile:** when you're done with the databases, stop them and quit Docker
+   Desktop (see [Local Docker databases](#local-docker-databases)).
 
 **Alternating laptops (testing laptop and main laptop):** the repo is the only thing the two
 laptops share; each has its own planner chat and Claude Code, with separate memories (see the
@@ -48,6 +53,7 @@ needs a fix now.
 | `config` FAIL | `POSTGRES_URL` or `MONGODB_URI` missing in `.env` | Add them (see [Setting up a new Windows laptop](#setting-up-a-new-windows-laptop)) |
 | `config` WARN | Alert settings missing | Add the `ALERT_*` settings, or accept that no emails are sent |
 | `config_upstox` / `config_llm` WARN | Only some of the group's settings are set | Set all of them, or none |
+| `databases` FAIL, both unreachable on the `full` profile | Docker Desktop or the local databases aren't running | Start them (see [Local Docker databases](#local-docker-databases)) and run health again |
 | `databases` FAIL, MongoDB unreachable | The cloud database's IP access list no longer includes this network (new network or changed IP) | Add the current IP in the provider console |
 | `databases` FAIL, Postgres unreachable | The database was asleep and the first connect timed out; or a password changed | Run health again; if it still fails, check the password in `.env` |
 | `databases` FAIL, no TLS | A connection string without TLS to a remote host | Add `sslmode=require` (Postgres) or use `mongodb+srv://` / `tls=true` (MongoDB) |
@@ -112,8 +118,69 @@ The main laptop runs the `full` profile and Docker. In order:
    in PowerShell set `$env:ALERT_DRY_RUN = "true"` first). Everything should be OK or SKIP.
 9. **Quit Docker Desktop when idle:** it holds its memory (up to the WSL cap) even when no
    container runs. Start it only when you need the local databases.
+10. **Local databases:** create `docker/compose.env`, start the databases, migrate them and
+    take a first backup, as in [Local Docker databases](#local-docker-databases).
 
-The local Docker databases themselves are set up in task 0.9b.
+## Local Docker databases
+
+On the `full` profile (main laptop) Postgres 18 and MongoDB 8.0 run in Docker, defined in
+`docker/compose.yaml`. Their passwords are in `docker/compose.env` (git-ignored; names in
+`docker/compose.env.example`), and `.env` points the four database URLs at `127.0.0.1`. Start
+Docker Desktop first; run everything from `<repo folder>`.
+
+| Task | Command |
+|---|---|
+| Start, and wait until both are healthy | `docker compose -f docker/compose.yaml --env-file docker/compose.env up -d --wait` |
+| Status (both should be `healthy`, ports on `127.0.0.1` only) | `docker compose -f docker/compose.yaml --env-file docker/compose.env ps` |
+| Stop (keeps the data) | `docker compose -f docker/compose.yaml --env-file docker/compose.env down` |
+| Back up | `uv run python -m market_intel.backup` |
+| Restore test of the newest backup | `uv run python -m market_intel.backup --verify` |
+
+Never run `docker compose config` without `--quiet`, `docker inspect` or `docker compose exec
+... env`: they print the passwords.
+
+**First start.** The init scripts in `docker/postgres-init/` and `docker/mongo-init/` create the
+logins (Postgres `mi_app`; the MongoDB app and setup users with the role `mi_app_rw`) from
+`docker/compose.env`. They run **only when the data volume is empty**, so editing
+`docker/compose.env` later changes no password: change it in the database too (`ALTER ROLE`
+in Postgres, `db.changeUserPassword()` in MongoDB), then in `.env`. After the first start:
+
+1. `uv run alembic upgrade head` (owner login, only after CI is green).
+2. `uv run python -m market_intel.mongo_setup` (setup login).
+3. `ALERT_DRY_RUN=true uv run python -m market_intel.health`: everything OK or SKIP.
+4. `uv run python -m market_intel.backup`, then `uv run python -m market_intel.backup --verify`.
+
+**Where the data lives.** A container is disposable; the data lives in the named volumes
+`market-intel_pgdata` and `market-intel_mongodata`.
+
+- `docker compose ... down` removes the containers and keeps the volumes: the data survives
+  the next `up`.
+- **Warning: `docker compose ... down -v` deletes the volumes and with them ALL local data.**
+  Never run it on the main laptop unless you mean to wipe the databases, and only after a
+  verified backup has been copied off the laptop.
+
+**Backups.**
+
+- `uv run python -m market_intel.backup` (the databases must be running; `full` profile only;
+  on `restricted` it stops with a message) writes one Postgres dump
+  (`market_intel-pg-<UTC time>.dump`) and one MongoDB archive
+  (`market_intel-mongo-<UTC time>.archive.gz`) to `BACKUP_DIR`. The default is a
+  `market-intel-backups` folder next to the repo folder; a folder inside the repo is refused.
+  It keeps the newest 7 of each and deletes older ones.
+- `uv run python -m market_intel.backup --verify` restores the newest backup into throwaway
+  databases (`market_intel_restore_test` in both), compares the row count of every table and
+  collection with the live databases, and drops the throwaway databases again (also when
+  something fails). Run it right after a backup, while nothing else writes; otherwise counts
+  can differ for a good reason.
+- **Copy the backups off the laptop regularly** (an external drive or your own cloud
+  storage): once ingestion starts, the local databases are the only copy of the data. Never
+  copy backups into the repo or into git.
+- A real restore after data loss isn't scripted yet: plan it with the planner first.
+
+**Quit Docker when idle.** Stop the databases (`down`) and quit Docker Desktop when you don't
+need them: Docker Desktop holds its memory (up to the WSL cap) even with no container running.
+Containers that were still running when Docker Desktop quit start again with it
+(`restart: unless-stopped`).
 
 ## Secrets
 
@@ -123,7 +190,7 @@ The local Docker databases themselves are set up in task 0.9b.
 | Postgres `mi_app` password (in `POSTGRES_URL`) | `.env` | `ALTER ROLE mi_app PASSWORD '...'` in the SQL editor |
 | MongoDB setup and app passwords (in `MONGODB_ADMIN_URI`, `MONGODB_URI`) | `.env` | The provider console's "Edit password" for that database user |
 | Gmail app password (`ALERT_EMAIL_APP_PASSWORD`) | `.env` | Delete it in the Google account and create a new one |
-| Docker database passwords | `docker/compose.env` (main laptop) | See task 0.9 |
+| Docker database passwords | `docker/compose.env` (main laptop) | Change it in the database too (see [Local Docker databases](#local-docker-databases)), then in `.env` |
 | GitHub CLI login | The CLI's own credential store | `gh auth refresh`, or `gh auth logout` and log in again |
 | Colab secrets | Colab's Secrets panel | Edit them in the panel |
 
@@ -176,6 +243,9 @@ fields, so `mongo_setup` must update the validator before code writes the field.
   values into a variable or reword examples; never commit a real secret.
 - **A commit is blocked by nbstripout:** it stripped notebook outputs; `git add` the notebook
   again and commit.
+- **A commit is blocked by commit-email-guard:** the author or committer email isn't your
+  GitHub no-reply address. Set it for this repo (`git config user.email "<your GitHub
+  no-reply address>"`, GitHub: Settings > Emails) and commit again. Never bypass the hook.
 
 ## Changing the project
 
