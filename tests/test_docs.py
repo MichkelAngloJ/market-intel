@@ -17,7 +17,8 @@ SPEC = ROOT / "docs" / "spec.md"
 WORKFLOW = ROOT / "docs" / "workflow.md"
 PROGRESS = ROOT / "docs" / "progress.md"
 CLAUDE_MD = ROOT / "CLAUDE.md"
-DOCS = [README, ARCHITECTURE, RUNBOOK, SPEC, WORKFLOW, PROGRESS, CLAUDE_MD]
+REVIEW_PHASE_0 = ROOT / "docs" / "reviews" / "phase-0.md"
+DOCS = [README, ARCHITECTURE, RUNBOOK, SPEC, WORKFLOW, PROGRESS, CLAUDE_MD, REVIEW_PHASE_0]
 README_MAX_LINES = 120
 CLAUDE_MD_MAX_LINES = 150
 
@@ -152,6 +153,7 @@ def test_readme_links_the_docs_and_license():
         "docs/spec.md",
         "docs/workflow.md",
         "docs/progress.md",
+        "docs/reviews/phase-0.md",
         "CLAUDE.md",
         "LICENSE.md",
     )
