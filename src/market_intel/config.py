@@ -191,6 +191,12 @@ class Settings(BaseSettings):
     upstox_api_key: SecretStr | None = None
     upstox_api_secret: SecretStr | None = None
     upstox_redirect_uri: str | None = None
+    # Upstox's published limits per API per user, and the share of them we use
+    # (market_intel.rate_limit). Change the limits only if Upstox changes them.
+    upstox_rate_per_second: int = Field(default=50, ge=1)
+    upstox_rate_per_minute: int = Field(default=500, ge=1)
+    upstox_rate_per_30min: int = Field(default=2000, ge=1)
+    upstox_rate_headroom: float = Field(default=0.8, gt=0, le=1)
     # llm
     gemini_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
