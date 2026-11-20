@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-21, HEAD 7a00494. Updated at the end of every task (see
+Last updated: 2026-11-21, HEAD b5f2bbe. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -11,6 +11,19 @@ Last updated: 2026-11-21, HEAD 7a00494. Updated at the end of every task (see
 - Before Phase 1: the owner opens an Upstox account (free API).
 - 0.9a review (planner, 2026-11-20): passed. Its one miss, the README's stale "Next:" line, was
   fixed in 0.9b.
+- Planner decisions during 0.9b (owner-approved defaults, 2026-11-21):
+  - One implementer: a second session got the prompt by mistake, stopped at A0 and changed
+    nothing. The first `up -d --wait` of this task was A1, on empty volumes.
+  - `backup` writes a manifest (counts right before each dump, tool versions, each file's
+    size and SHA-256). `--verify` compares the restored counts with the manifest and checks
+    the SHA-256 values; live counts are shown for information only.
+  - Logins: Postgres superuser inside the container and the MongoDB setup user for backups;
+    the Postgres superuser and MongoDB root only on the throwaway databases for the restore
+    test; MongoDB passwords only via a temporary `--config` file.
+  - The `server` profile is refused like `restricted` for now.
+  - The guard script stays in `scripts/commit_email_guard.py`.
+  - Not done yet: the `CLAUDE.md` Databases rule ("admin logins only for alembic, mongo_setup
+    and backup/restore") waits for the owner's OK in the implementing session.
 - Open questions resolved by the owner (2026-11-20):
   - Phase 4–8 names: resolved in 0.9a.
   - A `mongo_rights_probe` mismatch stays FAIL; an unexpected error stays WARN.
@@ -36,7 +49,7 @@ Last updated: 2026-11-21, HEAD 7a00494. Updated at the end of every task (see
 | 0.8b | done | verified (CI green, tests pass on the main laptop) | Device-neutral names |
 | main laptop setup | done 2026-11-20 | verified (health OK) | Tools, clone, `.env`, health check |
 | 0.9a | done 2026-11-20 (HEAD 1dfb7ce) | passed (planner, 2026-11-20) | Shared tracking files; phase titles; main laptop setup in the runbook |
-| 0.9b | done 2026-11-21 (HEAD 7a00494) | awaiting planner review | Local Docker databases on the main laptop (migrated, set up, backup and restore test); commit-email guard (hook + CI history test) |
+| 0.9b | done 2026-11-21 (HEAD b5f2bbe) | awaiting planner review | Local Docker databases on the main laptop (migrated, set up, backup with manifest and restore test); commit-email guard (hook + CI history test) |
 | 0.10 | next | – | Phase 0 wrap-up and honest review |
 | 0.11 | planned (not before 2026-12-03) | – | Remove testing-laptop dependency (hand-back checklist, cloud databases per the 0.10 decision, two-laptop docs) |
 
@@ -44,12 +57,14 @@ Last updated: 2026-11-21, HEAD 7a00494. Updated at the end of every task (see
 
 - Main laptop (`full`): local Docker databases at migration 0003, MongoDB collections and
   validators set up; `db_check` OK; health overall OK (`mongo_rights_probe` OK, refusal code
-  13). First backup and restore test OK; backups in `BACKUP_DIR`, outside the repo.
+  13). Backup with manifest and restore test OK (restored counts match the manifest, SHA-256
+  values match); backups in `BACKUP_DIR`, outside the repo. The very first backup there was
+  taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
-- CI and compose-smoke green at 7a00494.
+- CI green at b5f2bbe; compose-smoke last ran (green) at 7a00494.
 
 ## Carry-forward items
 
