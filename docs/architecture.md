@@ -168,9 +168,9 @@ The repo is public, so this section stays general: no hosts, network rules or us
 
 | Database | Login | Used by | Rights |
 |---|---|---|---|
-| Postgres | Owner (`POSTGRES_ADMIN_URL`) | Migrations only | Owns the tables |
+| Postgres | Owner (`POSTGRES_ADMIN_URL`) | Migrations only (on Docker the owner is the image's superuser, which `market_intel.backup` also uses inside the container, see below) | Owns the tables |
 | Postgres | `mi_app` (`POSTGRES_URL`) | Everything else | SELECT, INSERT, UPDATE, DELETE on tables; USAGE on sequences; read-only `alembic_version`; TEMP. No CREATE, DROP, ALTER, TRUNCATE |
-| MongoDB | Setup (`MONGODB_ADMIN_URI`) | `mongo_setup` only (and cleaning up demo audits) | readWrite + dbAdmin on the database |
+| MongoDB | Setup (`MONGODB_ADMIN_URI`) | `mongo_setup` and, on Docker, `market_intel.backup` (and cleaning up demo audits) | readWrite + dbAdmin on the database |
 | MongoDB | App, role `mi_app_rw` (`MONGODB_URI`) | Everything else | Per named collection, see below |
 
 Rights of the MongoDB role `mi_app_rw`:
@@ -187,10 +187,20 @@ validators. Rights are per collection because MongoDB's insert right also create
 collection; a database-wide insert would let a typo create a collection with no validator.
 
 The local Docker databases have the same two logins per database, created by the init scripts
-on first start. `market_intel.backup` uses none of them: it runs the dump and restore tools
-**inside** the containers with the containers' own admin logins (the Postgres superuser over the
-container's local socket; the MongoDB root user, whose password goes into a temporary config
-file inside the container). No password appears on a command line or in the output.
+on first start. `market_intel.backup` runs the dump and restore tools **inside** the
+containers, with the logins in the containers' own environment:
+
+| Step | Postgres | MongoDB |
+|---|---|---|
+| Backup (counts and dump of `market_intel`) | The image's superuser over the container's local socket (no password) | The setup user |
+| Restore test (create, restore into, count, drop `market_intel_restore_test`) | The superuser, only on the throwaway database | The root user, only on the throwaway database |
+| Live counts shown by `--verify` (information only) | `mi_app` (`POSTGRES_URL`) | The app user (`MONGODB_URI`) |
+
+MongoDB passwords reach `mongodump` and `mongorestore` only through a temporary config file
+inside the container (written with shell builtins under `umask 077`, deleted on exit);
+`mongosh` reads them from the container's environment inside its own process. No password
+appears on a command line or in the output. MongoDB users and roles live in `admin` and are
+not in the backup; on empty volumes the init scripts recreate them.
 
 ### TLS refusal
 
@@ -400,10 +410,14 @@ Data Health page (no secrets; hosts may appear).
   were migrated to head (0003) and set up with `mongo_setup`; the app connects with the same
   limited logins as in the cloud.
   - **Backups:** `python -m market_intel.backup` writes one Postgres dump (`pg_dump`, custom
-    format) and one MongoDB archive (`mongodump`, gzip) to `BACKUP_DIR`, named by UTC
-    timestamp, and keeps the newest 7 of each. `--verify` restores the newest backup into
-    throwaway databases (`market_intel_restore_test`), compares the row count of every table
-    and collection with the source, and drops them again.
+    format), one MongoDB archive (`mongodump`, gzip) and a JSON manifest to `BACKUP_DIR`,
+    named by UTC timestamp, and keeps the newest 7 of each kind. The manifest holds the UTC
+    time, the counts of every table and collection taken right before each dump, the tool
+    versions, and each file's size and SHA-256.
+  - **Restore test:** `--verify` checks the newest backup's sizes and SHA-256 values, restores
+    it into throwaway databases (`market_intel_restore_test`), requires the counts to match
+    the manifest exactly, shows today's live counts for information, and drops the throwaway
+    databases again.
   - Whether the cloud databases are deleted or kept as an off-site backup once the testing
     laptop is handed back is decided in 0.10.
 

@@ -162,16 +162,34 @@ in Postgres, `db.changeUserPassword()` in MongoDB), then in `.env`. After the fi
 **Backups.**
 
 - `uv run python -m market_intel.backup` (the databases must be running; `full` profile only;
-  on `restricted` it stops with a message) writes one Postgres dump
-  (`market_intel-pg-<UTC time>.dump`) and one MongoDB archive
-  (`market_intel-mongo-<UTC time>.archive.gz`) to `BACKUP_DIR`. The default is a
-  `market-intel-backups` folder next to the repo folder; a folder inside the repo is refused.
-  It keeps the newest 7 of each and deletes older ones.
-- `uv run python -m market_intel.backup --verify` restores the newest backup into throwaway
-  databases (`market_intel_restore_test` in both), compares the row count of every table and
-  collection with the live databases, and drops the throwaway databases again (also when
-  something fails). Run it right after a backup, while nothing else writes; otherwise counts
-  can differ for a good reason.
+  on other profiles it stops with a message) writes to `BACKUP_DIR`:
+  - one Postgres dump (`market_intel-pg-<UTC time>.dump`, as the Postgres superuser inside
+    the container),
+  - one MongoDB archive (`market_intel-mongo-<UTC time>.archive.gz`, as the MongoDB setup
+    user),
+  - a manifest (`market_intel-manifest-<UTC time>.json`): the UTC time, the row count of every
+    table and the document count of every collection taken right before each dump, the
+    `pg_dump` and `mongodump` versions, and each dump file's size and SHA-256. It is written
+    last; dumps without a manifest are an incomplete backup.
+
+  The default `BACKUP_DIR` is a `market-intel-backups` folder next to the repo folder; a
+  folder inside the repo is refused. It keeps the newest 7 of each kind and deletes older
+  ones.
+- **Take backups while nothing is writing** to the databases, so the counts in the manifest
+  match the dumps exactly. There is no ingestion yet; once there is, back up between runs.
+- `uv run python -m market_intel.backup --verify` checks the newest backup:
+  - each dump file's size and SHA-256 against the manifest;
+  - it restores both dumps into throwaway databases (`market_intel_restore_test` in both) and
+    compares the counts with the manifest: they must match exactly;
+  - it prints today's live counts (app logins) for information only; they may differ once
+    data has changed since the backup;
+  - it drops the throwaway databases again, also when something fails.
+
+  The restore test uses the Postgres superuser and the MongoDB root user, and only on the
+  throwaway databases.
+- **MongoDB logins and roles are not in the backup:** they live in the `admin` database, and
+  only `market_intel` is dumped. A restore onto empty volumes relies on the init scripts and
+  `docker/compose.env` to recreate them.
 - **Copy the backups off the laptop regularly** (an external drive or your own cloud
   storage): once ingestion starts, the local databases are the only copy of the data. Never
   copy backups into the repo or into git.
