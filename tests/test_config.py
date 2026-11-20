@@ -353,3 +353,22 @@ def test_real_repo_default_backup_dir_is_outside_the_repo(monkeypatch):
     s = load_with(monkeypatch, APP_PROFILE="full")
     assert not config.is_inside(s.backup_dir, REAL_REPO)
     assert s.backup_dir.parent == REAL_REPO.parent
+
+
+# --- task 0.10: BACKUP_MAX_AGE_DAYS ------------------------------------------------------
+
+
+def test_backup_max_age_days_default_is_7(monkeypatch):
+    assert load_with(monkeypatch, APP_PROFILE="full").backup_max_age_days == 7
+
+
+def test_backup_max_age_days_can_be_set(monkeypatch):
+    assert (
+        load_with(monkeypatch, APP_PROFILE="full", BACKUP_MAX_AGE_DAYS="3").backup_max_age_days == 3
+    )
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "2.5", "a week"])
+def test_backup_max_age_days_must_be_a_whole_number_of_at_least_1(monkeypatch, value):
+    with pytest.raises(ConfigError, match="BACKUP_MAX_AGE_DAYS"):
+        load_with(monkeypatch, APP_PROFILE="full", BACKUP_MAX_AGE_DAYS=value)

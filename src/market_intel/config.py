@@ -175,6 +175,8 @@ class Settings(BaseSettings):
     # Backups are data: the folder must be outside the repo (checked below). Default: a
     # market-intel-backups folder next to the repo folder.
     backup_dir: Path = Path("../market-intel-backups")
+    # health warns (backup_age) when the newest complete backup is older than this
+    backup_max_age_days: int = Field(default=7, ge=1)
 
     # database
     postgres_url: SecretStr | None = None
