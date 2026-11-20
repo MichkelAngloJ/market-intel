@@ -8,15 +8,22 @@ All commands run from `<repo folder>` with `uv run` in front.
 ## Daily routine
 
 1. `git pull`
-2. `uv run python -m market_intel.health` and fix anything that isn't OK or SKIP (see
+2. Read [docs/progress.md](progress.md): the current task and the carry-forward items.
+3. `uv run python -m market_intel.health` and fix anything that isn't OK or SKIP (see
    [Reading the health output](#reading-the-health-output)).
-3. Work.
-4. `uv run pytest` and `uv run pre-commit run --all-files`.
-5. `git push`, then check that CI is green.
+4. Work.
+5. `uv run pytest` and `uv run pre-commit run --all-files`.
+6. `git push`, then check that CI is green.
 
-**Alternating laptops (testing laptop and main laptop):** never work on both at once. Always pull first and
-push last, so the other laptop starts from the latest state. `.env` is not synced: each laptop
-has its own.
+**Alternating laptops (testing laptop and main laptop):** the repo is the only thing the two
+laptops share; each has its own planner chat and Claude Code, with separate memories (see the
+[workflow](workflow.md#shared-memory-is-the-repo)).
+
+- Never work on both at once.
+- Always `git pull` first, then read [docs/progress.md](progress.md), work, run the tests and
+  pre-commit, and `git push` last, so the other laptop starts from the latest state.
+- Update [docs/progress.md](progress.md) at the end of every task, before the last push.
+- `.env` is not synced: each laptop has its own.
 
 Useful extras:
 
@@ -74,9 +81,39 @@ If several Postgres checks fail together (`databases`, `pg_migrations`, `data_fr
 6. Allow this laptop's network in the MongoDB access list (provider console).
 7. `uv run python -m market_intel.health`: everything should be OK or SKIP.
 
-### Main laptop and Docker
+### Main laptop setup
 
-Completed in task 0.9.
+The main laptop runs the `full` profile and Docker. In order:
+
+1. **Install the tools with winget** (in a terminal):
+   `winget install --id Git.Git`, `winget install --id astral-sh.uv`,
+   `winget install --id GitHub.cli`, `winget install --id Microsoft.VisualStudioCode` and
+   `winget install --id Docker.DockerDesktop`. Use `winget upgrade --id <id>` for tools that
+   are already installed (old Docker Desktop versions have known security flaws). Docker's
+   installer asks for admin approval: watch for the prompt, it may open behind other windows.
+2. **Cap WSL's memory** (Docker Desktop runs in WSL): create `.wslconfig` in your user folder
+   (`%UserProfile%`) with these two lines, then run `wsl --shutdown` so it takes effect:
+
+   ```ini
+   [wsl2]
+   memory=6GB
+   ```
+
+3. **Clone** the repo into `<repo folder>` (a drive with enough free space) and open a
+   terminal there.
+4. **Set the Git identity for this repo only:** `git config user.name "<your name>"` and
+   `git config user.email "<your GitHub no-reply address>"` (GitHub: Settings > Emails).
+   Never a personal address: commits are public.
+5. `uv sync`, then `uv run pre-commit install`.
+6. **Copy `.env` securely** from the other laptop (USB drive or password manager; never by
+   email, chat or git) and set `APP_PROFILE=full`.
+7. **Allow this laptop's network** in the MongoDB access list (provider console).
+8. **Health check:** `ALERT_DRY_RUN=true uv run python -m market_intel.health` (in Git Bash;
+   in PowerShell set `$env:ALERT_DRY_RUN = "true"` first). Everything should be OK or SKIP.
+9. **Quit Docker Desktop when idle:** it holds its memory (up to the WSL cap) even when no
+   container runs. Start it only when you need the local databases.
+
+The local Docker databases themselves are set up in task 0.9b.
 
 ## Secrets
 

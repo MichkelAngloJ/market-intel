@@ -48,7 +48,8 @@ flowchart LR
 
 ### Planned data flow
 
-Nothing in this diagram exists yet; it is the plan for Phases 1 to 8.
+Nothing in this diagram exists yet; it is the plan for Phases 1 to 9 (see
+[Planned (later phases)](#planned-later-phases)).
 
 ```mermaid
 flowchart LR
@@ -383,26 +384,32 @@ Data Health page (no secrets; hosts may appear).
 
 ## Planned (later phases)
 
-Placeholders, filled in as each phase is built.
+Placeholders, filled in as each phase is built. The full brief for each phase is in the
+[spec](spec.md#phases-build--learn).
 
-### Phase 1
+Modules are built in order (stocks, then IPOs, then mutual funds); the next one starts only
+after the current one passes validation.
+
+### Phase 1 — Stock data pipeline
 
 Data pipeline: instruments and daily candles, `ingestion_runs`, `data_gaps`, the Upstox token.
 
-### Phase 2
+### Phase 2 — Events and features
 
 Includes the full leakage test.
 
-### Phase 3
+### Phase 3 — Stock models
 
 Includes model training, the PyTorch CUDA check and how training data reaches Colab.
 
-### Phase 4
+### Phase 4 — Paper trading page
 
-### Phase 5
+### Phase 5 — Online learning and anomaly detection
 
-### Phase 6
+### Phase 6 — IPO module
 
-### Phase 7
+### Phase 7 — Mutual funds module
 
-### Phase 8
+### Phase 8 — Agent layer
+
+### Phase 9 — Optional: reinforcement learning experiment

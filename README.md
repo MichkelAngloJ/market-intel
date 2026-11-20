@@ -21,7 +21,12 @@ Colab template. Next: setting up the main laptop, then Phase 1, the data pipelin
 - [Runbook](docs/runbook.md): how to operate it (daily routine, fixing health-check problems,
   setting up a laptop, secrets, migrations).
 - [Decision log](docs/decisions.md): every decision, with concerns and reasons.
+- [Spec](docs/spec.md): the project brief (goal, data sources, phases, modeling rules).
+- [Workflow](docs/workflow.md): how the owner, the planner and Claude Code work together.
+- [Progress](docs/progress.md): task status, next task and carry-forward items.
 - [License](LICENSE.md).
+
+[CLAUDE.md](CLAUDE.md) holds the standing rules that Claude Code loads in every session.
 
 ## Quick setup
 
