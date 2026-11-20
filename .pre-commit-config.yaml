@@ -35,3 +35,12 @@ repos:
         entry: uv run --frozen nbstripout
         language: system
         types: [jupyter]
+      # Blocks a commit unless its author and committer emails are the GitHub no-reply
+      # address (the repo is public). Skipped in CI, where tests/test_repo_safety.py checks
+      # every commit in the history.
+      - id: commit-email-guard
+        name: commit-email-guard
+        entry: uv run --frozen python scripts/commit_email_guard.py
+        language: system
+        always_run: true
+        pass_filenames: false
