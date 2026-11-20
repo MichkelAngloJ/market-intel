@@ -34,7 +34,8 @@ you implement exactly ONE task per session and report back. Workflow:
   old decision entries (append new ones).
 - **Databases:**
   - App code uses the app logins (`POSTGRES_URL`, `MONGODB_URI`). The owner/setup logins
-    (`POSTGRES_ADMIN_URL`, `MONGODB_ADMIN_URI`) are only for alembic and `mongo_setup`.
+    (`POSTGRES_ADMIN_URL`, `MONGODB_ADMIN_URI`) are only for alembic, `mongo_setup` and
+    backup/restore (`market_intel.backup`).
   - Migrations run by hand, only after CI is green; never downgrade a real database.
   - MongoDB validators reject unknown fields: run `mongo_setup` BEFORE code writes a new
     field. Adding a collection follows the checklist in
