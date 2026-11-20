@@ -1,12 +1,12 @@
 # Progress
 
-Last updated: 2026-11-20, HEAD 57c25e9. Updated at the end of every task (see
+Last updated: 2026-11-20, HEAD 1dfb7ce. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
 
-- Phase 0 (setup). Now: 0.9a. Next: 0.9b (local Docker databases decision + commit-email
-  guard). Then 0.10 (Phase 0 wrap-up and honest review), then Phase 1.
+- Phase 0 (setup). Now: 0.9a done, awaiting planner review. Next: 0.9b (local Docker
+  databases decision + commit-email guard). Then 0.10 (Phase 0 wrap-up and honest review), then Phase 1.
 - Before Phase 1: the owner opens an Upstox account (free API).
 
 ## Tasks
@@ -24,7 +24,7 @@ Last updated: 2026-11-20, HEAD 57c25e9. Updated at the end of every task (see
 | 0.8 | done | passed | Docs restructure (phase titles finished in 0.9a) |
 | 0.8b | done | verified (CI green, tests pass on the main laptop) | Device-neutral names |
 | main laptop setup | done 2026-11-20 | verified (health OK) | Tools, clone, `.env`, health check |
-| 0.9a | in progress | – | Shared tracking files |
+| 0.9a | done 2026-11-20 (HEAD 1dfb7ce) | awaiting planner review | Shared tracking files; phase titles; main laptop setup in the runbook |
 | 0.9b | next | – | Local Docker databases decision; commit-email guard |
 | 0.10 | planned | – | Phase 0 wrap-up and honest review |
 
