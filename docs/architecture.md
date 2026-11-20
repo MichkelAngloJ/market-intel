@@ -375,6 +375,7 @@ Data Health page (no secrets; hosts may appear).
 | `mongo_rights_probe` | The app login's rights, tested by behaviour: a delete that matches nothing must be allowed everywhere except `prediction_audit`, and an insert into an unknown collection must be refused. **Any mismatch = FAIL**; an unexpected error = WARN. Refusal codes 8000 (cloud) and 13 (Docker) both count |
 | `unexpected_collections` | Collections not in `schemas.py` = WARN |
 | `laptop` | Free disk on the repo's drive (WARN below 10 GB, FAIL below 2 GB), plus the size of `logs/` and `data/` |
+| `backup_age` | `full` profile only (SKIP otherwise). Age of the newest complete backup (one with a manifest) in `BACKUP_DIR`, from the manifest's timestamp; no database access. Older than `BACKUP_MAX_AGE_DAYS` (default 7), or no manifest or folder = WARN; never FAIL |
 | `data_freshness` | The latest `ingestion_runs` row. SKIP with no runs; WARN if the last run failed |
 | `upstox_token` | SKIP until Phase 1 |
 | `llm_spend` | This IST month's spend against `LLM_MONTHLY_CAP_INR`. WARN at `LLM_WARN_PCT`, FAIL at 100% |
@@ -386,7 +387,8 @@ Data Health page (no secrets; hosts may appear).
   waiting for another retry. So one unreachable Postgres fails `databases`, `pg_migrations`,
   `data_freshness` and `llm_spend` together.
 - **App logins only**, never the admin logins. It writes nothing except `db_check`'s own write
-  tests (a TEMP table and `_healthcheck`) and the probe's match-nothing deletes. If the probe's
+  tests (a TEMP table and `_healthcheck`) and the probe's match-nothing deletes. `backup_age`
+  reads only file names and the newest manifest's timestamp. If the probe's
   insert ever succeeds, health FAILs and names the stray collection to drop by hand.
 
 ## Compute and Colab
@@ -418,8 +420,9 @@ Data Health page (no secrets; hosts may appear).
     it into throwaway databases (`market_intel_restore_test`), requires the counts to match
     the manifest exactly, shows today's live counts for information, and drops the throwaway
     databases again.
-  - Whether the cloud databases are deleted or kept as an off-site backup once the testing
-    laptop is handed back is decided in 0.10.
+  - The free cloud databases are used only by the testing laptop and are deleted in 0.11
+    (decision 2026-11-21). Copies away from the main laptop come from copying `BACKUP_DIR` to
+    external storage; health's `backup_age` warns when the newest backup is old.
 
 ## Testing and CI
 

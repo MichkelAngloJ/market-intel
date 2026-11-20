@@ -28,12 +28,17 @@ validates.
   changing machines needs no code changes.
 - PostgreSQL: prices, features, predictions, paper trades. MongoDB: news, LLM extractions,
   audit records.
-- Testing phase: free cloud databases. Local Docker databases run on the main laptop. A move
-  to an always-free ARM cloud VM happens only when the owner decides.
+- Testing phase: free cloud databases, used only by the testing laptop and deleted in 0.11.
+  Local Docker databases run on the main laptop; copies away from it come from copying the
+  backup folder to external storage. A move to an always-free ARM cloud VM happens only when
+  the owner decides.
 - Laptops aren't always on: ingestion must detect gaps and backfill.
 - Memory: container limits; no heavy training while ingestion runs.
 - GPU: the main laptop's 4 GB GPU for small models; Colab's free GPU for heavier training.
 - The repo is public: code and docs only.
+- AI access to project data: AI tools query project data only through an MCP connection,
+  free options only (an existing free MCP server or one built in this repo), with a
+  read-only login. The concrete server is chosen in a later task.
 
 ## Cost
 

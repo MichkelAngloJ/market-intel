@@ -10,10 +10,10 @@ A personal system that predicts, explains (SHAP and an audit trail) and validate
 trading) signals for Indian markets: stocks first, then IPOs, then mutual funds. **Signals
 only, never real orders.**
 
-**Status:** Phase 0 (foundations) is nearly done: configuration, logging and alerts, Postgres
-and MongoDB with limited logins, migrations, validated collections, a daily health check and a
-Colab template. The main laptop now runs the databases locally in Docker, with tested backups.
-Next: 0.10 (Phase 0 wrap-up), then Phase 1, the data pipeline.
+**Status:** Phase 0 (foundations) is complete (tag `phase-0`): configuration, logging and
+alerts, Postgres and MongoDB with limited logins, migrations, validated collections, a daily
+health check, local Docker databases with tested backups, and a Colab template. Next: Phase 1,
+the data pipeline (after the Upstox account is open).
 
 ## Docs
 
@@ -25,6 +25,8 @@ Next: 0.10 (Phase 0 wrap-up), then Phase 1, the data pipeline.
 - [Spec](docs/spec.md): the project brief (goal, data sources, phases, modeling rules).
 - [Workflow](docs/workflow.md): how the owner, the planner and Claude Code work together.
 - [Progress](docs/progress.md): task status, next task and carry-forward items.
+- [Phase 0 review](docs/reviews/phase-0.md): what works, what doesn't, risks, what to do
+  differently.
 - [License](LICENSE.md).
 
 [CLAUDE.md](CLAUDE.md) holds the standing rules that Claude Code loads in every session.

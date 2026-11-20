@@ -17,8 +17,13 @@ All commands run from `<repo folder>` with `uv run` in front.
 5. Work.
 6. `uv run pytest` and `uv run pre-commit run --all-files`.
 7. `git push`, then check that CI is green.
-8. **On the `full` profile:** when you're done with the databases, stop them and quit Docker
+8. **On the `full` profile, after a work day:** back up
+   (`uv run python -m market_intel.backup`; see [Local Docker databases](#local-docker-databases)).
+9. **On the `full` profile:** when you're done with the databases, stop them and quit Docker
    Desktop (see [Local Docker databases](#local-docker-databases)).
+10. **Weekly:** copy `BACKUP_DIR` to external storage (an external drive or your own cloud
+    storage). Once the cloud databases are deleted (0.11), these copies are the only ones away
+    from the main laptop.
 
 **Alternating laptops (testing laptop and main laptop):** the repo is the only thing the two
 laptops share; each has its own planner chat and Claude Code, with separate memories (see the
@@ -65,6 +70,7 @@ needs a fix now.
 | `mongo_rights_probe` FAIL, created a collection | The app login could create collections | Fix the role, then drop the named stray collection in the provider console (the app login can't drop) |
 | `unexpected_collections` WARN | A collection that isn't in `schemas.py` | Find where it came from; drop it in the provider console if it isn't needed |
 | `laptop` WARN / FAIL | Under 10 GB / 2 GB free disk | Free up space; check the size of `logs/` and `data/` |
+| `backup_age` WARN | The newest complete backup (with a manifest) is older than `BACKUP_MAX_AGE_DAYS` (default 7), or there is none | Run the backup: `uv run python -m market_intel.backup` (databases running), then copy `BACKUP_DIR` to external storage |
 | `data_freshness` WARN | The last ingestion run failed | Read its error in `ingestion_runs` and the logs (from Phase 1) |
 | `llm_spend` WARN / FAIL | Spend this IST month is at `LLM_WARN_PCT` / at the cap | Stop paid LLM calls; raising the cap needs a decision-log entry (rule R2) |
 
