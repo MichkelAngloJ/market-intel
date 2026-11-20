@@ -137,7 +137,7 @@ def main() -> int:
     except ConfigError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
         return 1
-    configure_logging(settings)
+    configure_logging(settings, "db_check")
     try:
         with bound_context(run_id=new_run_id(), component="db_check"):
             return run(settings)

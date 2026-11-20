@@ -165,7 +165,7 @@ def main() -> int:
     except ConfigError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
         return 1
-    configure_logging(settings)
+    configure_logging(settings, "mongo_setup")
     url = admin.mongodb_admin_uri.get_secret_value()
     redact = redactor(url)
     with bound_context(run_id=new_run_id(), component="mongo_setup"):

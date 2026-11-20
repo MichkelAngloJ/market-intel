@@ -280,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
         return 1
-    configure_logging(settings)
+    configure_logging(settings, "alerts")
 
     result = AlertSender(settings).send(
         "warning",

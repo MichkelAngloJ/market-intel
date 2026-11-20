@@ -14,9 +14,14 @@ How it fits together (structlog + the standard ``logging`` module):
 Masking runs inside each handler's formatter, so it covers structlog and stdlib records alike.
 All stored timestamps are UTC; only the console shows DISPLAY_TIMEZONE.
 
+One file per component: each program passes its component name and writes
+``LOG_DIR/<component>.jsonl``, which it rotates on its own. On Windows a file that another
+process holds open can't be renamed, so two programs sharing one file would block each
+other's rotation; separate files avoid that.
+
 Usage::
 
-    configure_logging(get_settings())
+    configure_logging(get_settings(), "ingest")
     log = get_logger(__name__)
     with bound_context(run_id=new_run_id(), component="ingest"):
         log.info("candles_fetched", instrument="RELIANCE", rows=375)
@@ -41,8 +46,22 @@ from pydantic import SecretStr
 from market_intel.config import Settings
 
 MASK = "***"
-LOG_FILE_NAME = "market_intel.jsonl"
+DEFAULT_COMPONENT = "market_intel"
+LOG_SUFFIX = ".jsonl"
 BACKUP_DAYS = 30
+_COMPONENT = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def log_file_name(component: str) -> str:
+    """``<component>.jsonl``. Component names are short lower-case words (also safe as paths)."""
+    if not _COMPONENT.fullmatch(component):
+        raise ValueError(
+            f"invalid log component {component!r}: use lower-case letters, digits and _"
+        )
+    return f"{component}{LOG_SUFFIX}"
+
+
+LOG_FILE_NAME = log_file_name(DEFAULT_COMPONENT)  # used when no component is given
 
 # Any key whose name contains one of these (case-insensitive) has its value masked.
 _SENSITIVE_KEY = re.compile(
@@ -137,12 +156,19 @@ def reset_logging() -> None:
         handler.close()
 
 
-def configure_logging(settings: Settings, *, console_stream: TextIO | None = None) -> None:
+def configure_logging(
+    settings: Settings,
+    component: str = DEFAULT_COMPONENT,
+    *,
+    console_stream: TextIO | None = None,
+) -> None:
     """Set up JSON file + console logging. Safe to call again (replaces its own handlers).
 
-    ``console_stream`` defaults to stderr; tests pass a StringIO.
+    ``component`` names the program (``health``, ``backup``, ...): it writes only to
+    ``LOG_DIR/<component>.jsonl``. ``console_stream`` defaults to stderr; tests pass a StringIO.
     """
     global _secret_values
+    file_name = log_file_name(component)  # validate before touching anything
     _secret_values = _collect_secrets(settings)
 
     reset_logging()
@@ -151,7 +177,7 @@ def configure_logging(settings: Settings, *, console_stream: TextIO | None = Non
 
     # A new file every midnight UTC; the old ones get a date suffix, 30 are kept.
     file_handler = logging.handlers.TimedRotatingFileHandler(
-        settings.log_dir / LOG_FILE_NAME,
+        settings.log_dir / file_name,
         when="midnight",
         utc=True,
         backupCount=BACKUP_DAYS,

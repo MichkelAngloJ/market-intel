@@ -594,7 +594,7 @@ def main(argv: list[str] | None = None, *, ctx: Context | None = None, sender=No
     except ConfigError:
         settings = None  # the config check reports it; other checks fail on their own
     if settings is not None:
-        configure_logging(settings)
+        configure_logging(settings, "health")
     with bound_context(run_id=new_run_id(), component="health"):
         try:
             results = run_checks(ctx)
