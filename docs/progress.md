@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-21, HEAD b5f2bbe. Updated at the end of every task (see
+Last updated: 2026-11-21, HEAD 3961a2b. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -22,8 +22,9 @@ Last updated: 2026-11-21, HEAD b5f2bbe. Updated at the end of every task (see
     test; MongoDB passwords only via a temporary `--config` file.
   - The `server` profile is refused like `restricted` for now.
   - The guard script stays in `scripts/commit_email_guard.py`.
-  - Not done yet: the `CLAUDE.md` Databases rule ("admin logins only for alembic, mongo_setup
-    and backup/restore") waits for the owner's OK in the implementing session.
+  - The `CLAUDE.md` Databases rule now says the owner/setup logins are only for alembic,
+    `mongo_setup` and backup/restore (`market_intel.backup`); approved by the owner
+    (2026-11-21), done in 3961a2b.
 - Open questions resolved by the owner (2026-11-20):
   - Phase 4–8 names: resolved in 0.9a.
   - A `mongo_rights_probe` mismatch stays FAIL; an unexpected error stays WARN.
@@ -49,7 +50,7 @@ Last updated: 2026-11-21, HEAD b5f2bbe. Updated at the end of every task (see
 | 0.8b | done | verified (CI green, tests pass on the main laptop) | Device-neutral names |
 | main laptop setup | done 2026-11-20 | verified (health OK) | Tools, clone, `.env`, health check |
 | 0.9a | done 2026-11-20 (HEAD 1dfb7ce) | passed (planner, 2026-11-20) | Shared tracking files; phase titles; main laptop setup in the runbook |
-| 0.9b | done 2026-11-21 (HEAD b5f2bbe) | awaiting planner review | Local Docker databases on the main laptop (migrated, set up, backup with manifest and restore test); commit-email guard (hook + CI history test) |
+| 0.9b | done 2026-11-21 (HEAD 3961a2b) | awaiting planner review | Local Docker databases on the main laptop (migrated, set up, backup with manifest and restore test); commit-email guard (hook + CI history test) |
 | 0.10 | next | – | Phase 0 wrap-up and honest review |
 | 0.11 | planned (not before 2026-12-03) | – | Remove testing-laptop dependency (hand-back checklist, cloud databases per the 0.10 decision, two-laptop docs) |
 
@@ -64,7 +65,7 @@ Last updated: 2026-11-21, HEAD b5f2bbe. Updated at the end of every task (see
   collections set up).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
-- CI green at b5f2bbe; compose-smoke last ran (green) at 7a00494.
+- CI green at e83aef1 (all 0.9b code); compose-smoke last ran (green) at 7a00494.
 
 ## Carry-forward items
 
