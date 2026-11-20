@@ -234,3 +234,13 @@
 - Decision: Profiles are named by what a machine may do: restricted (testing; cloud databases; no broker keys, rule R1), full (main work; Docker databases; broker keys allowed), server (later hosting). Device names and machine details were removed from code, docs and older decision entries (each edited entry is marked as redacted), and a test blocks device names from coming back.
 - Concern (planner): The old wording remains in the public git history; rewriting history with a force-push isn't worth the risk for laptop names. Naming profiles after devices leaked them once the repo went public; the planner should have flagged it then.
 - Reason (owner): Third parties don't need to know which machines I use.
+
+## 2026-11-20 - Shared tracking in the repo
+- Decision: Each laptop has its own planner chat and Claude Code with separate memory, so the repo is the shared memory: CLAUDE.md (standing rules, loaded by Claude Code automatically), docs/spec.md (the project brief, kept current), docs/workflow.md (how owner, planner and Claude Code work), docs/progress.md (task status, next task, carry-forward items). Every session starts with git pull and reading progress.md; every task ends by updating it.
+- Concern (planner): Everything here is public, so personal details, laptop specifics and account information stay out; the planner's start-up prompts, which hold them, are kept outside the repo. If progress.md isn't updated, sessions drift, so every review checks it.
+- Reason (owner): Work alternates between two laptops; GitHub is the only common place.
+
+## 2026-11-20 - Main laptop set up
+- Decision: The main laptop runs the full profile. Tools were installed or updated with winget (Docker Desktop's old version had a critical container-escape flaw, CVE-2025-9074), WSL memory is capped at 6 GB, the repo sits on a second drive, and the Git identity is the GitHub no-reply address. The health check is overall OK on both laptops.
+- Concern (planner): On a 15 GB laptop Docker holds its memory even when idle, so quit it when local databases aren't needed. Before the switch, this laptop's global Git identity was a non-personal address; a commit-email guard follows in 0.9b.
+- Reason (owner): Alternate between both laptops through git.
