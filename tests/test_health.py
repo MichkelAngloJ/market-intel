@@ -5,12 +5,13 @@ import copy
 import io
 import json
 from collections import namedtuple
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 
-from market_intel import health
+from market_intel import backup, health
 from market_intel.config import load_settings
 from market_intel.db.common import DbReport
 from market_intel.logging_setup import configure_logging
@@ -183,12 +184,24 @@ class FakeSender:
         return SimpleNamespace(status="dry_run")
 
 
+def write_manifest(folder, taken, **fields):
+    """A manifest named by its UTC timestamp, as market_intel.backup writes it."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / backup.MANIFEST.name(backup.stamp(taken))
+    data = {"format": 1, "created_utc": taken.strftime("%Y-%m-%dT%H:%M:%SZ"), **fields}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    # A fresh complete backup in a tmp BACKUP_DIR: the real backup folder is never read.
+    write_manifest(tmp_path / "backups", datetime.now(UTC) - timedelta(hours=1))
     values = {
         "APP_PROFILE": "full",
         "LOG_DIR": str(tmp_path / "logs"),
         "DATA_DIR": str(tmp_path / "data"),
+        "BACKUP_DIR": str(tmp_path / "backups"),
         "POSTGRES_URL": PG_URL,
         "MONGODB_URI": MONGO_URL,
         "ALERT_DRY_RUN": "true",
@@ -245,6 +258,7 @@ def test_all_good_statuses(env):
         "mongo_rights_probe": "OK",
         "unexpected_collections": "OK",
         "laptop": "OK",
+        "backup_age": "OK",
         "data_freshness": "SKIP",
         "upstox_token": "SKIP",
         "llm_spend": "OK",
@@ -494,3 +508,107 @@ def test_connections_are_closed(env):
     ctx = make_ctx(pg=pg, mongo_db=db)
     health.main([], ctx=ctx, sender=FakeSender())
     assert pg.closed
+
+
+# --- task 0.10: backup age ---------------------------------------------------------------
+
+
+NOW = datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
+
+
+def backup_ctx(now=NOW):
+    ctx = make_ctx()
+    ctx.now = lambda: now
+    return ctx
+
+
+@pytest.fixture
+def backups(env, tmp_path):
+    """An empty BACKUP_DIR (the env fixture's fresh manifest removed)."""
+    folder = tmp_path / "backups"
+    for path in folder.iterdir():
+        path.unlink()
+    return folder
+
+
+def test_backup_age_ok_when_recent(backups):
+    write_manifest(backups, NOW - timedelta(days=2))
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "OK"
+    assert result.message == "newest backup 2.0 days old (limit 7 days)"
+    assert result.details["created_utc"] == "2026-11-19T12:00:00Z"
+
+
+def test_backup_age_uses_the_newest_manifest(backups):
+    write_manifest(backups, NOW - timedelta(days=30))
+    write_manifest(backups, NOW - timedelta(hours=5))
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "OK" and "5 h old" in result.message
+
+
+def test_backup_age_warns_when_old(backups):
+    write_manifest(backups, NOW - timedelta(days=7, minutes=1))
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "WARN"
+    assert (
+        result.message
+        == "newest backup 7.0 days old (limit 7 days): run python -m market_intel.backup"
+    )
+
+
+def test_backup_age_limit_comes_from_settings(backups, monkeypatch):
+    write_manifest(backups, NOW - timedelta(days=2))
+    monkeypatch.setenv("BACKUP_MAX_AGE_DAYS", "1")
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "WARN" and "limit 1 days" in result.message
+
+
+def test_backup_age_warns_when_no_folder(env, tmp_path, monkeypatch):
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "never-created"))
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "WARN" and "no backup folder" in result.message
+
+
+def test_backup_age_warns_when_no_manifest(backups):
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "WARN" and "no complete backup" in result.message
+
+
+def test_backup_age_ignores_a_dump_without_a_manifest(backups):
+    write_manifest(backups, NOW - timedelta(days=10))
+    fresh = backup.stamp(NOW - timedelta(minutes=5))
+    for kind in backup.DUMPS:  # a newer backup that never finished: dumps, no manifest
+        (backups / kind.name(fresh)).write_bytes(b"x")
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "WARN" and "10.0 days old" in result.message
+    for path in backups.iterdir():
+        if backup.MANIFEST.matches(path.name):
+            path.unlink()
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "WARN" and "no complete backup" in result.message
+
+
+def test_backup_age_warns_on_an_unreadable_manifest(backups):
+    path = write_manifest(backups, NOW - timedelta(days=1))
+    path.write_text("not json", encoding="utf-8")
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "WARN" and "no readable timestamp" in result.message
+
+
+@pytest.mark.parametrize("profile", ["restricted", "server"])
+def test_backup_age_skips_off_the_full_profile(backups, monkeypatch, profile):
+    monkeypatch.setenv("APP_PROFILE", profile)
+    result = health.check_backup_age(backup_ctx())
+    assert result.status == "SKIP" and result.message == "backups run on the full profile only"
+
+
+def test_backup_age_never_touches_a_database(backups):
+    write_manifest(backups, NOW - timedelta(days=1))
+
+    def no_db(_db):
+        raise AssertionError("backup_age must not open a database")
+
+    ctx = make_ctx(pg_connect=no_db)
+    ctx._mongo_client = no_db
+    ctx.now = lambda: NOW
+    assert health.check_backup_age(ctx).status == "OK"

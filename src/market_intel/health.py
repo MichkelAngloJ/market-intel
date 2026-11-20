@@ -9,7 +9,8 @@ Runs every check and prints STATUS | CHECK | MESSAGE:
 Each check is isolated: an exception makes only that check FAIL (with a masked message).
 Uses ONLY the app logins (POSTGRES_URL, MONGODB_URI), never the admin logins. Writes nothing
 except db_check's own write tests (TEMP table, _healthcheck) and delete probes that match
-nothing. The JSON output is meant for the future Data Health page; it holds no secrets.
+nothing. backup_age reads only file names and the newest manifest's timestamp in BACKUP_DIR.
+The JSON output is meant for the future Data Health page; it holds no secrets.
 """
 
 from __future__ import annotations
@@ -21,14 +22,14 @@ import sys
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
 from pymongo.errors import OperationFailure, PyMongoError
 
-from market_intel import mongo_setup
+from market_intel import backup, mongo_setup
 from market_intel.alerts import AlertSender
 from market_intel.config import REPO_ROOT, ConfigError, Settings, get_settings, required_fields
 from market_intel.db import mongo, postgres
@@ -85,6 +86,7 @@ class Context:
         disk_usage: Callable[[Path], Any] = shutil.disk_usage,
         dir_size: Callable[[Path], int] | None = None,
         probe_id: Callable[[], str] = lambda: uuid.uuid4().hex,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._load_settings = load_settings
         self.pg_checker = pg_checker
@@ -95,6 +97,7 @@ class Context:
         self.disk_usage = disk_usage
         self.dir_size = dir_size or _dir_size
         self.probe_id = probe_id
+        self.now = now
         self._cache: dict[str, Any] = {}
         self._redactors: list[Callable[[str], str]] = []
 
@@ -393,6 +396,48 @@ def check_laptop(ctx: Context) -> CheckResult:
     return CheckResult("laptop", "OK", message, details)
 
 
+def _age_text(age: timedelta) -> str:
+    hours = max(age.total_seconds(), 0) / 3600
+    return f"{hours:.0f} h" if hours < 48 else f"{hours / 24:.1f} days"
+
+
+def check_backup_age(ctx: Context) -> CheckResult:
+    """Age of the newest COMPLETE backup (one with a manifest) in BACKUP_DIR. Full profile only.
+
+    Reads only file names and the manifest's timestamp; never touches a database. Never FAILs:
+    an old or missing backup is a WARN.
+    """
+    s = ctx.settings
+    if s.app_profile != backup.PROFILE:
+        return CheckResult("backup_age", "SKIP", "backups run on the full profile only")
+    limit = s.backup_max_age_days
+    details: dict[str, Any] = {"max_age_days": limit, "newest": None, "created_utc": None}
+    run_backup = "run python -m market_intel.backup"
+    if not s.backup_dir.is_dir():
+        return CheckResult("backup_age", "WARN", f"no backup folder yet: {run_backup}", details)
+    manifests = backup.backups(s.backup_dir, backup.MANIFEST)
+    if not manifests:
+        return CheckResult(
+            "backup_age", "WARN", f"no complete backup (no manifest): {run_backup}", details
+        )
+    newest = manifests[0]
+    details["newest"] = newest.name
+    try:
+        created = json.loads(newest.read_text(encoding="utf-8"))["created_utc"]
+        taken = datetime.strptime(created, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except (OSError, ValueError, KeyError, TypeError):
+        return CheckResult(
+            "backup_age", "WARN", f"manifest {newest.name} has no readable timestamp", details
+        )
+    age = ctx.now() - taken
+    details["created_utc"] = created
+    details["age_days"] = round(age.total_seconds() / 86400, 2)
+    message = f"newest backup {_age_text(age)} old (limit {limit} days)"
+    if age > timedelta(days=limit):
+        return CheckResult("backup_age", "WARN", f"{message}: {run_backup}", details)
+    return CheckResult("backup_age", "OK", message, details)
+
+
 def check_data_freshness(ctx: Context) -> CheckResult:
     row = (
         ctx.pg()
@@ -454,6 +499,7 @@ CHECKS: tuple[tuple[str, Callable[[Context], CheckResult]], ...] = (
     ("mongo_rights_probe", check_mongo_rights_probe),
     ("unexpected_collections", check_unexpected_collections),
     ("laptop", check_laptop),
+    ("backup_age", check_backup_age),
     ("data_freshness", check_data_freshness),
     ("upstox_token", check_upstox_token),
     ("llm_spend", check_llm_spend),
