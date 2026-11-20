@@ -1,14 +1,31 @@
 # Progress
 
-Last updated: 2026-11-21, HEAD 3961a2b. Updated at the end of every task (see
+Last updated: 2026-11-21, HEAD 4eb9574. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
 
-- Phase 0 (setup). Now: 0.9b done, awaiting planner review. Next: 0.10 (Phase 0 wrap-up and
-  honest review), then Phase 1. 0.11 (remove the testing-laptop dependency) is planned for
-  not before 2026-12-03.
-- Before Phase 1: the owner opens an Upstox account (free API).
+- Phase 0 (setup) is complete: 0.10 done, awaiting planner review; tag `phase-0`. Review:
+  [docs/reviews/phase-0.md](reviews/phase-0.md).
+- Next: Phase 1 planning by the planner, and the owner's Upstox account (owner-side, no code,
+  no keys). 0.11 (remove the testing-laptop dependency) stays planned for not before
+  2026-12-03.
+- 0.9b review (planner, 2026-11-21): passed. All commits pushed; CI green at 9e19a1e;
+  compose-smoke green at 7a00494; the CLAUDE.md admin-login rule updated (owner-approved);
+  health overall OK on the full profile against local Docker; backups outside the repo, with
+  manifests; the email guard blocked a test email; every commit uses the no-reply address.
+  Accepted notes: the 0.9b decision entry was amended within its own task, before review;
+  mongosh reads its password from the container environment; the first backup has no
+  manifest and rotation will remove it; the restore test compared mostly zero counts (its
+  carry-forward stays).
+- Owner decisions (2026-11-21):
+  1. The cloud databases are deleted in 0.11, after the testing laptop is handed back. Copies
+     away from the main laptop come from copying `BACKUP_DIR` to external storage.
+  2. A backup-age health check now (done in 0.10: `backup_age`, `BACKUP_MAX_AGE_DAYS`).
+  3. The owner opens the Upstox account during 0.10 (owner-side: no code, no keys).
+  4. AI tools query project data only through an MCP connection, free options only (an
+     existing free MCP server or one built in this repo), with a read-only login. The
+     concrete server is chosen in a later task.
 - 0.9a review (planner, 2026-11-20): passed. Its one miss, the README's stale "Next:" line, was
   fixed in 0.9b.
 - Planner decisions during 0.9b (owner-approved defaults, 2026-11-21):
@@ -50,22 +67,24 @@ Last updated: 2026-11-21, HEAD 3961a2b. Updated at the end of every task (see
 | 0.8b | done | verified (CI green, tests pass on the main laptop) | Device-neutral names |
 | main laptop setup | done 2026-11-20 | verified (health OK) | Tools, clone, `.env`, health check |
 | 0.9a | done 2026-11-20 (HEAD 1dfb7ce) | passed (planner, 2026-11-20) | Shared tracking files; phase titles; main laptop setup in the runbook |
-| 0.9b | done 2026-11-21 (HEAD 3961a2b) | awaiting planner review | Local Docker databases on the main laptop (migrated, set up, backup with manifest and restore test); commit-email guard (hook + CI history test) |
-| 0.10 | next | – | Phase 0 wrap-up and honest review |
+| 0.9b | done 2026-11-21 (HEAD 3961a2b) | passed (planner, 2026-11-21) | Local Docker databases on the main laptop (migrated, set up, backup with manifest and restore test); commit-email guard (hook + CI history test) |
+| 0.10 | done 2026-11-21 (HEAD 4eb9574) | awaiting planner review | Phase 0 wrap-up: `backup_age` health check and `BACKUP_MAX_AGE_DAYS`; Phase 0 review; spec (cloud databases, AI access through MCP); tag `phase-0` |
 | 0.11 | planned (not before 2026-12-03) | – | Remove testing-laptop dependency (hand-back checklist, cloud databases per the 0.10 decision, two-laptop docs) |
 
 ## State
 
 - Main laptop (`full`): local Docker databases at migration 0003, MongoDB collections and
-  validators set up; `db_check` OK; health overall OK (`mongo_rights_probe` OK, refusal code
-  13). Backup with manifest and restore test OK (restored counts match the manifest, SHA-256
+  validators set up; `db_check` OK; health overall OK (9 OK, 4 SKIP; `mongo_rights_probe` OK,
+  refusal code 13; `backup_age` OK after a fresh backup). Backup with manifest and restore test OK (restored counts match the manifest, SHA-256
   values match); backups in `BACKUP_DIR`, outside the repo. The very first backup there was
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
-- CI green at e83aef1 (all 0.9b code); compose-smoke last ran (green) at 7a00494.
+- CI and compose-smoke green at 7c7f966 (all 0.10 code; compose-smoke shows `backup_age`
+  WARN there, as expected with no backup folder). The final commit's CI result is in the 0.10
+  report.
 
 ## Carry-forward items
 
@@ -84,8 +103,9 @@ Last updated: 2026-11-21, HEAD 3961a2b. Updated at the end of every task (see
 - Before the testing laptop is handed back: log out of GitHub CLI, revoke its token, delete
   its `.env`, remove its network from the MongoDB access list.
 - Main laptop: quit Docker Desktop when not using local databases (it holds 6 GB).
-- Main laptop: copy the backups (`BACKUP_DIR`) off the laptop regularly; once ingestion starts
-  the local databases are the only copy of the data.
-- Before Phase 1 ingestion: consider a health check for backup age.
+- Main laptop: back up after work days and copy `BACKUP_DIR` to external storage weekly; once
+  ingestion starts and the cloud databases are deleted (0.11), these are the only copies.
+- Before AI first queries project data (Phase 2 at the latest): plan the MCP connection
+  task (free, read-only login, local only).
 - Re-run `backup --verify` after the first Phase 1 ingestion: so far the local databases are
   empty apart from `alembic_version`, so the restore test compared mostly zero counts.
