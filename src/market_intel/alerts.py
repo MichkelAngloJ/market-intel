@@ -7,8 +7,15 @@
 - critical  -> logged and emailed
 
 The same alert (key, default "level:title") is emailed at most once per ALERT_THROTTLE_HOURS.
-Throttle state lives in DATA_DIR/state/alert_throttle.json so it survives restarts.
+Throttle state lives in DATA_DIR/state/alert_throttle.json so it survives restarts. Reading and
+updating it happens under a cross-process file lock (alert_throttle.json.lock), and the window
+is claimed BEFORE the email goes out (and given back if sending fails), so two programs
+alerting at the same moment send at most one email per window.
 Sending never raises: failures are logged and returned as status "failed".
+
+Jobs don't wait for the email: ``queue_alert(...)`` (or a ``BackgroundAlerts``) hands the alert
+to a background thread and returns at once. At exit, queued alerts are flushed with a bounded
+wait (FLUSH_TIMEOUT_S); whatever is still queued then is logged as not sent.
 
 Manual check: ``uv run python -m market_intel.alerts --test [--dry-run]``.
 """
@@ -16,12 +23,15 @@ Manual check: ``uv run python -m market_intel.alerts --test [--dry-run]``.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
+import queue
 import smtplib
 import ssl
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -32,6 +42,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from market_intel.config import ConfigError, Settings, get_settings, mask_email
+from market_intel.file_lock import file_lock
 from market_intel.logging_setup import configure_logging, get_logger, mask_text, mask_value
 
 Level = Literal["info", "warning", "critical"]
@@ -40,6 +51,7 @@ Status = Literal["sent", "logged", "suppressed", "dry_run", "failed"]
 SMTP_TIMEOUT_S = 20
 RETRY_DELAY_S = 5
 SSL_PORT = 465
+FLUSH_TIMEOUT_S = 60.0  # at exit: wait at most this long for queued alerts
 FOOTER = "Automated alert from market-intel. Not investment advice."
 
 log = get_logger("market_intel.alerts")  # fixed name: __name__ is "__main__" under -m
@@ -61,6 +73,11 @@ class ThrottleStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.lock_path = path.with_name(path.name + ".lock")
+
+    def locked(self):
+        """Cross-process lock for a read-modify-write of the state file."""
+        return file_lock(self.lock_path)
 
     def load(self) -> dict[str, str]:
         try:
@@ -79,6 +96,20 @@ class ThrottleStore:
     def record(self, key: str, when: datetime) -> None:
         data = self.load()
         data[key] = when.isoformat()
+        self._write(data)
+
+    def restore(self, key: str, claimed: datetime, previous: str | None) -> None:
+        """Undo a claim made at ``claimed`` (only if nobody has claimed the key since)."""
+        data = self.load()
+        if data.get(key) != claimed.isoformat():
+            return
+        if previous is None:
+            data.pop(key)
+        else:
+            data[key] = previous
+        self._write(data)
+
+    def _write(self, data: dict[str, str]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Write to a temp file in the same folder, then swap it in: a crash can't leave
         # a half-written file behind.
@@ -160,21 +191,35 @@ class AlertSender:
         recipient = mask_email(alerts.alert_email_to)
         fields["recipient"] = recipient
 
-        if use_throttle and self._throttled(throttle_id, now):
-            log_at("alert", status="suppressed", **fields)
-            return AlertResult(status="suppressed", throttle_id=throttle_id, recipient=recipient)
+        # Check and claim the throttle window under the lock, so a second program alerting at
+        # the same moment sees the claim and stays quiet. SMTP runs outside the lock.
+        with self.throttle.locked():
+            if use_throttle and self._throttled(throttle_id, now):
+                log_at("alert", status="suppressed", **fields)
+                return AlertResult(
+                    status="suppressed", throttle_id=throttle_id, recipient=recipient
+                )
 
-        message = self.build_message(level, title, body, context, now)
-        if self.settings.alert_dry_run if dry_run is None else dry_run:
-            log_at("alert", status="dry_run", **fields)
-            return AlertResult("dry_run", throttle_id, recipient, message=message)
+            message = self.build_message(level, title, body, context, now)
+            if self.settings.alert_dry_run if dry_run is None else dry_run:
+                log_at("alert", status="dry_run", **fields)
+                return AlertResult("dry_run", throttle_id, recipient, message=message)
+
+            previous = self.throttle.load().get(throttle_id)
+            if use_throttle:
+                self.throttle.record(throttle_id, now)
 
         error = self._deliver_with_retry(message)
+        with self.throttle.locked():
+            if error:
+                if use_throttle:  # give the window back: the next attempt may send
+                    self.throttle.restore(throttle_id, now, previous)
+            elif not use_throttle:
+                self.throttle.record(throttle_id, now)
         if error:
             log.error("alert", status="failed", error=error, **fields)
             return AlertResult("failed", throttle_id, recipient, error=error, message=message)
 
-        self.throttle.record(throttle_id, now)
         log_at("alert", status="sent", **fields)
         return AlertResult("sent", throttle_id, recipient, message=message)
 
@@ -248,6 +293,102 @@ class AlertSender:
                 smtp.starttls(context=context)
                 smtp.login(alerts.alert_email_from, password)
                 smtp.send_message(message)
+
+
+class BackgroundAlerts:
+    """Sends alerts on a background thread, so a job never waits for SMTP.
+
+    ``send`` queues and returns at once. ``flush`` waits (bounded) until the queue is empty;
+    it is registered with ``atexit`` so queued alerts still go out when the program ends.
+    """
+
+    def __init__(
+        self,
+        sender: AlertSender,
+        *,
+        flush_timeout_s: float = FLUSH_TIMEOUT_S,
+        register_atexit: bool = True,
+    ) -> None:
+        self.sender = sender
+        self.flush_timeout_s = flush_timeout_s
+        self._queue: queue.Queue[tuple[tuple[Any, ...], dict[str, Any]]] = queue.Queue()
+        self._pending = 0
+        self._done = threading.Condition()
+        self._thread: threading.Thread | None = None
+        self._start_lock = threading.Lock()
+        if register_atexit:
+            atexit.register(self.flush)
+
+    def send(self, level: Level, title: str, body: str, **kwargs: Any) -> None:
+        """Queue one alert (same arguments as AlertSender.send) and return at once."""
+        with self._done:
+            self._pending += 1
+        self._queue.put(((level, title, body), kwargs))
+        self._ensure_thread()
+
+    def _ensure_thread(self) -> None:
+        with self._start_lock:
+            if self._thread is None or not self._thread.is_alive():
+                # daemon: a stuck SMTP server can't keep the program alive past flush()
+                self._thread = threading.Thread(target=self._run, name="alert-sender", daemon=True)
+                self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            args, kwargs = self._queue.get()
+            try:
+                self.sender.send(*args, **kwargs)  # never raises
+            except BaseException as exc:  # last resort: keep the thread alive
+                log.error("alert_background_error", error_type=type(exc).__name__)
+            finally:
+                with self._done:
+                    self._pending -= 1
+                    self._done.notify_all()
+
+    @property
+    def pending(self) -> int:
+        with self._done:
+            return self._pending
+
+    def flush(self, timeout_s: float | None = None) -> bool:
+        """Wait until every queued alert is handled, at most ``timeout_s`` (default
+        FLUSH_TIMEOUT_S). Returns False (and logs it) if alerts were still queued."""
+        limit = self.flush_timeout_s if timeout_s is None else timeout_s
+        deadline = time.monotonic() + limit
+        with self._done:
+            while self._pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    log.warning("alerts_not_flushed", pending=self._pending, waited_s=limit)
+                    return False
+                self._done.wait(remaining)
+        return True
+
+
+_background: BackgroundAlerts | None = None
+_background_lock = threading.Lock()
+
+
+def background_alerts() -> BackgroundAlerts:
+    """The process-wide background sender (created on first use, with the app's settings)."""
+    global _background
+    with _background_lock:
+        if _background is None:
+            _background = BackgroundAlerts(AlertSender(get_settings()))
+        return _background
+
+
+def queue_alert(
+    level: Level,
+    title: str,
+    body: str,
+    *,
+    key: str | None = None,
+    context: Mapping[str, Any] | None = None,
+    dry_run: bool | None = None,
+) -> None:
+    """Like send_alert, but returns at once: the email goes out on a background thread."""
+    background_alerts().send(level, title, body, key=key, context=context, dry_run=dry_run)
 
 
 def send_alert(
