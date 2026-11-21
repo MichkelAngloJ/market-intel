@@ -53,6 +53,7 @@ from market_intel.logging_setup import (
     mask_text,
     new_run_id,
 )
+from market_intel.mongo import access
 from market_intel.mongo.models import NewsItem
 from market_intel.source_health import SourceHealth, load_state, state_path
 from market_intel.sources import rss
@@ -438,7 +439,7 @@ def _collection(settings: Settings, given: Any | None):
         return
     db = settings.require("database")
     with mongo.client(db) as client:
-        yield client[db.mongodb_db][COLLECTION]
+        yield access.collection(client[db.mongodb_db], COLLECTION)
 
 
 # --- status ------------------------------------------------------------------------------
@@ -483,7 +484,7 @@ def status_lines(
 def document_counts(settings: Settings) -> dict[str, int]:
     db = settings.require("database")
     with mongo.client(db) as client:
-        rows = client[db.mongodb_db][COLLECTION].aggregate(
+        rows = access.collection(client[db.mongodb_db], COLLECTION).aggregate(
             [{"$group": {"_id": "$feed_name", "n": {"$sum": 1}}}]
         )
         return {row["_id"]: row["n"] for row in rows if row["_id"]}
