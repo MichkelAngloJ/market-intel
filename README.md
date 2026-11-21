@@ -13,8 +13,8 @@ only, never real orders.**
 **Status:** Phase 0 (foundations) is complete (tag `phase-0`): configuration, logging and
 alerts, Postgres and MongoDB with limited logins, migrations, validated collections, a daily
 health check, local Docker databases with tested backups, and a Colab template. Now: Phase 1,
-the data pipeline; the groundwork and the daily NSE instrument list with a watchlist are in
-place.
+the data pipeline; the groundwork, the daily NSE instrument list with a watchlist, and the
+news and exchange feeds with source-health alerts are in place.
 
 ## Docs
 
@@ -24,6 +24,8 @@ place.
   setting up a laptop, secrets, migrations).
 - [Decision log](docs/decisions.md): every decision, with concerns and reasons.
 - [Spec](docs/spec.md): the project brief (goal, data sources, phases, modeling rules).
+- [Factor map](docs/factors.md): what moves Indian stock prices, the free source for each
+  factor and when it's built; manipulation patterns; expert ideas as tested hypotheses.
 - [Workflow](docs/workflow.md): how the owner, the planner and Claude Code work together.
 - [Progress](docs/progress.md): task status, next task and carry-forward items.
 - [Phase 0 review](docs/reviews/phase-0.md): what works, what doesn't, risks, what to do
@@ -59,6 +61,7 @@ Details, including how to copy secrets safely, are in the
 | `uv run python -m market_intel.mongo_setup` | Creates or updates MongoDB collections with the setup login |
 | `uv run python -m market_intel.backup` | Backs up the local Docker databases outside the repo (`--verify`: restore test); `full` profile only |
 | `uv run python -m market_intel.instruments refresh` | Refreshes NSE stocks (EQ, BE) and indices from Upstox's public file (`--dry-run` saves nothing) |
+| `uv run python -m market_intel.news fetch` | Fetches the RSS news and NSE/BSE announcement feeds politely into MongoDB (`status`: per-feed health) |
 | `uv run python -m market_intel.watchlist list` | Shows the watchlist (`add SYMBOL`, `remove SYMBOL`; max 50, stored only in the database) |
 
 The daily routine and what to do when a check fails are in the
