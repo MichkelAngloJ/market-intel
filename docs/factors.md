@@ -31,7 +31,7 @@ Phase 3 measures the contributions per sector and stock with SHAP instead of ass
 | Macro and policy | RBI rates, inflation, budget, policy, crude, USD-INR | days–months | macro data + news | 1.6 |
 | Global and geopolitics | war, US Fed, commodities | days | news + global indices | 1.2, 1.6 |
 | Market mood | India VIX, risk-on/off | all horizons | Upstox | 1.6 |
-| News and sentiment | tone, surprise, amount of coverage | hours–days | RSS + per-company news + FinBERT/LLM | 1.2, 1.2b, Phase 2 |
+| News and sentiment | tone, surprise, amount of coverage | hours–days | RSS feeds (1.2) + per-company news from Google News RSS for the watchlist and recent filers (1.2b) + FinBERT/LLM | 1.2, 1.2b, Phase 2 |
 | Surveillance risk | ASM/GSM lists, circuit limits, series BE | small caps | NSE lists; series BE | 1.6b, Phase 5 |
 | Calendar | results season, F&O expiry week, budget day | days | exchange calendar | Phase 2 |
 | Liquidity | traded value, bid-ask spread | all (costs, slippage) | candles, order book | Phase 2, 4 |

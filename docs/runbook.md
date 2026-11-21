@@ -368,6 +368,9 @@ How it works: [architecture](architecture.md#news-and-exchange-feeds) and
 | Ignore the 10-minute interval (never ignores `Retry-After`) | `uv run python -m market_intel.news fetch --force` |
 | Fetch and parse, save nothing | `uv run python -m market_intel.news fetch --dry-run` |
 | Per-feed status and problems | `uv run python -m market_intel.news status` |
+| Per-company news for the watchlist and recent filers (Google News RSS) | `uv run python -m market_intel.news company-fetch` |
+| One company only | `uv run python -m market_intel.news company-fetch --symbol SYM` |
+| Re-key stored exchange items (once, after 1.2b; dry run first) | `uv run python -m market_intel.news migrate-exchange-keys --dry-run` |
 
 **Reading a fetch.** The first line gives the run status (`success`, `partial` or `failed`)
 and the totals; then one line per feed: new and duplicate items (a duplicate keeps the first
@@ -386,11 +389,30 @@ changed. The email names the rule, the masked last error and the next step.
 | `malformed` | Items lost their link or title | Check the feed in a browser; the parser may need an update (a code task) |
 | `volume_drop` | The feed returns far fewer items than usual | Often temporary; if it lasts, check the feed URL and the publisher's RSS page |
 | `no_publish_time` | The date format changed | The parser needs the new format (a code task); until then items use the fetch time |
+| `silent` (14 days) | The feed returns no items at all for two weeks | Open it in a browser; if it's dead, set `enabled = false` |
 
 A rule stays an active problem (health `sources` WARN, `news status` shows it) until a later
 fetch passes it. Alerts repeat at most once per `ALERT_THROTTLE_HOURS` per feed and rule.
 After a fix, run `uv run python -m market_intel.news fetch --feed NAME --force` and check
 `news status`.
+
+**Per-company news (Google News RSS).** `company-fetch` covers every watchlist stock plus
+up to 30 companies that filed with the exchanges in the last 24 hours. **Adding watchlist
+stocks improves coverage** (`uv run python -m market_intel.watchlist add SYMBOL`). It asks
+Google at most once every 10 seconds and each company at most once an hour. The summary
+shows targets (watchlist / filers), requests, new / shared / duplicate items,
+high / low confidence and whether Google blocked us. Low confidence means a one-word
+name or a name not found in the headline: treat those items with care.
+
+**"google_news blocked" alert.** Google refused automated access (403/429/503, a web
+page instead of a feed, or a consent/CAPTCHA redirect). The code already stopped and
+pauses all Google requests until the next IST day. **Wait; don't retry, don't use
+`--force`** (it can't override the pause anyway) and never change the user agent. If
+blocks repeat over several days, tell the planner: the source may need to be dropped.
+
+**BSE codes.** `instruments refresh` also maps BSE scrip codes from Upstox's BSE file;
+its summary ends with "BSE codes: N instruments have a bse_code". "BSE codes: FAILED"
+means only that part failed (the run is `partial`); run the refresh again later.
 
 The feed list is in the repo; nothing fetched (headlines, state files) is ever committed. The
 publishers' RSS terms usually allow personal, non-commercial use with a link back; ours stays

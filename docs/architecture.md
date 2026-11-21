@@ -90,6 +90,8 @@ flowchart LR
 | `python -m market_intel.watchlist add`, `remove`, `list` | The watchlist (max 50 stocks), stored only in the database |
 | `python -m market_intel.news fetch` | Fetches the RSS news and exchange feeds into `news_items` (`--feed`, `--force`, `--dry-run`) |
 | `python -m market_intel.news status` | Per-feed fetch and source-health status |
+| `python -m market_intel.news company-fetch` | Per-company news from Google News RSS for the watchlist and recent filers (`--symbol`, `--force`, `--dry-run`) |
+| `python -m market_intel.news migrate-exchange-keys` | Recomputes the item keys of stored exchange items (`--dry-run`) |
 
 All are run with `uv run` in front.
 
@@ -278,11 +280,11 @@ could be any machine on the network, so it needs TLS.
 
 Defined in `src/market_intel/db/schema.py` (SQLAlchemy Core) and created by Alembic migrations
 in `migrations/` (0001 schema, 0002 grants for `mi_app`, 0003 trigger and TEMP grant, 0004
-instrument seen dates, symbol reuse, symbol history and watchlist).
+instrument seen dates, symbol reuse, symbol history and watchlist, 0005 BSE scrip codes).
 
 | Table | Holds |
 |---|---|
-| `instruments` | One row per tradable symbol: exchange, segment, symbol, ISIN, Upstox key, sector, first and last seen dates |
+| `instruments` | One row per tradable symbol: exchange, segment, symbol, ISIN, Upstox key, BSE scrip code, sector, first and last seen dates |
 | `instrument_symbol_history` | Every symbol change a refresh saw: old and new symbol, IST date |
 | `watchlist` | The owner's watchlist (max 50 stocks, note up to 200 characters); its contents never go in the repo |
 | `candles_daily` | Daily OHLCV per instrument and IST trading date, with source and raw/adjusted flag |
@@ -304,6 +306,7 @@ Key rules:
 - A trigger (`set_updated_at`) keeps `instruments.updated_at` current on every update.
 - A symbol is unique per exchange and segment **among active instruments only** (a partial
   unique index, 0004), so a symbol can be reused after the old instrument goes inactive.
+- `bse_code` (0005) is unique where set; most rows without a BSE listing stay NULL.
 - `mi_app` gets its rights on new tables from the default privileges set in 0002; no
   migration grants rights by itself.
 
@@ -320,7 +323,7 @@ validators and indexes are listed in `src/market_intel/mongo/schemas.py`. Every 
 
 | Collection | Holds | Unique key |
 |---|---|---|
-| `news_items` | One news item or exchange announcement: source, feed, kind (`news` or `exchange`), publisher, URL, title, summary, `published_at` (with its source), `fetched_at`, **`available_at`** (when this system could know it), `exchange_meta` and `symbols` | `url_hash` (sha256 of the normalised URL) |
+| `news_items` | One news item, exchange announcement or per-company article: source, feed, kind (`news`, `exchange` or `company_news`), publisher, URL, title, summary, `published_at` (with its source), `fetched_at`, **`available_at`** (when this system could know it), `exchange_meta`, `match_confidence` and `symbols` | `url_hash`, **the item key** (see below) |
 | `llm_extractions` | Events an LLM read from one article (RBI action, results surprise, order win, sentiment, ...), with its `published_at` | `news_item_id` + `prompt_version` |
 | `prediction_audit` | One record per prediction: inputs, model, SHAP reasons, news and LLM calls used, signal, and later the outcome | `prediction_id` |
 | `_healthcheck` | Used only by `db_check`'s write test | |
@@ -335,6 +338,15 @@ validators and indexes are listed in `src/market_intel/mongo/schemas.py`. Every 
   `available_at`, `published_at_source` and the optional `exchange_meta` object (its own
   `additionalProperties: false`). The model fills `available_at` and checks that it equals
   max(`published_at`, `fetched_at`); the validator requires it.
+- **The item key (`url_hash`, 1.2b):** news and company news: sha256 of the normalised
+  URL. Exchange items: sha256 of the normalised URL + "#" + the item's identity: the
+  feed's guid if it has one, otherwise the normalised title + "|" + `published_at` (UTC
+  ISO; the title alone when the time came from the fetch, so one filing keeps one key).
+  Filings that share one PDF are therefore separate events. The NSE and BSE feeds have
+  no guid today. Items stored before 1.2b were re-keyed once with
+  `news migrate-exchange-keys` (update only, idempotent; a conflict leaves the item
+  unchanged and is reported). 1.2b also added `kind = "company_news"` and the optional
+  `match_confidence` (`high` / `low`).
 - **`mongo_setup`** (setup login) is the only thing that creates collections, validators and
   indexes. It is idempotent: it creates what is missing, updates validators that changed
   (collMod) and prints a summary; a second run prints "nothing to change". It never drops a
@@ -446,6 +458,13 @@ Task 1.1 (decision 2026-11-22). Commands: `market_intel.instruments` and
   cap; parsed with the `json` module only, never executed or evaluated. Each kept object is
   validated into an `Instrument` record tagged `upstox`; malformed objects (and duplicates)
   are skipped and counted.
+- **BSE scrip codes (1.2b):** the refresh also downloads Upstox's public `BSE.json.gz`
+  (`UPSTOX_BSE_INSTRUMENTS_URL`; same conditional GET, size caps and untrusted-data rules;
+  saved as `BSE-<YYYYMMDD>.json.gz` with its own validators). From segment `BSE_EQ` it
+  maps ISIN -> scrip code (the file's `exchange_token`, a 6-digit code; checked against
+  BSE's own feed) onto NSE stocks by ISIN, in its own transaction, with the same safety
+  valve. If only the BSE part fails, the NSE refresh still counts and the run is
+  `partial`. With `--file` the BSE part is skipped unless `--bse-file` is given.
 - **Filter:** NSE stocks (segment `NSE_EQ`) of series EQ and BE, and every NSE index
   (`NSE_INDEX`). Everything else is skipped and counted by segment. Stored as exchange `NSE`,
   segment `EQ` or `INDEX`, series = the file's `instrument_type` (NULL for indices). Upstox
@@ -514,7 +533,8 @@ Task 1.2 (decisions 2026-11-22: legitimate channels only; news and exchange feed
 - **Exchange items:** `exchange_meta` keeps what the feed says (exchange, raw company name, the
   exchange's own code where given: BSE's scrip code, subject, attachment URL; never
   downloaded). `symbols` is set only on a **clear match** with an active NSE stock: the exact
-  NSE symbol, or exactly one stock with the same normalised company name (case, punctuation,
+  NSE symbol, the stock's BSE scrip code for BSE items (1.2b), or exactly one stock with the
+  same normalised company name (case, punctuation,
   "&"/"and", "Ltd"/"Limited" ignored). Ambiguous or no match: `symbols = []`, counted in the
   summary. News items get `symbols = []`; Phase 2 extracts companies.
 - **Runs:** one `ingestion_run(job="news_fetch", source="rss")`; `rows_written` = new
@@ -538,12 +558,51 @@ text only), written atomically under a file lock.
 | `malformed` | more than 50% of entries had no link or title |
 | `volume_drop` | fewer items than 20% of the median of the last 10 content fetches (only after 5 or more, and only if that median is above 0) |
 | `no_publish_time` | more than 50% of usable items had no publish time (the date format probably changed) |
+| `silent` | 0 items in every content fetch of the last 14 days (only once the source has 14 days of content history; 1.2b) |
+| `blocked` | the source refused automated access (Google News; alert titled "google_news blocked"); cleared by the next successful fetch |
 
 Each rule queues one WARNING alert per source and rule, throttled by the alert throttle
 (`ALERT_THROTTLE_HOURS`). The alert names the source, the rule, the masked last error and the
 next step: "the source may have changed: update config/news_feeds.toml or the parser". A rule
 stays an **active problem** until a later attempt passes it; health's `sources` check is WARN
 while an enabled source has one, SKIP before any fetch, otherwise OK.
+
+## Per-company news (Google News RSS)
+
+Task 1.2b (decision 2026-11-22). Command: `market_intel.news company-fetch`
+(`market_intel.sources.google_news`); logs to `logs/news.jsonl` (counts only, never symbols).
+
+- **Targets:** every watchlist stock, plus up to `GOOGLE_NEWS_FILERS_CAP` (default 30)
+  **recent filers**: distinct matched symbols of exchange items with `available_at` in the
+  last 24 hours, newest first, not on the watchlist. `--symbol SYM` fetches one active NSE
+  stock instead.
+- **Query:** `GOOGLE_NEWS_RSS_URL?q="<clean name>" when:2d&hl=en-IN&gl=IN&ceid=IN:en`, URL
+  encoded. The clean name is `instruments.name` without Limited/Ltd/Ltd. and a leading "The",
+  spacing normalised. Checked 2026-11-22: an RSS 2.0 feed (title, link, guid, pubDate, an HTML
+  description, `<source>` = the publisher); no ETag or Last-Modified, so no conditional
+  requests.
+- **Politeness:** one request per `GOOGLE_NEWS_MIN_SECONDS` (default 10) across the process (a
+  `RateLimiter`); each company at most once per `GOOGLE_NEWS_COMPANY_INTERVAL_MINUTES`
+  (default 60; `--force` ignores this); the honest user agent; redirects are not followed;
+  the Google item links are stored, never opened. State: `data/state/google_news.json` (each
+  company's last fetch and the block pause).
+- **Block handling:** HTTP 403, 429 or 503, a body that isn't a feed (an HTML page), or a
+  redirect to a consent, "sorry" or CAPTCHA page **stops the round at once**. No Google request
+  is made until the next IST day (not even with `--force`), one source-health alert
+  "google_news blocked" is queued, and the run is `partial` (or `failed` if nothing was
+  fetched). Nothing is retried and the identity never changes. Rounds during the pause make
+  no request and end `success` with 0 rows; health's `sources` shows the block.
+- **Storage:** `news_items` with `kind = "company_news"`, `feed_name = "google_news"`,
+  `source = "google_news"`, `publisher` = the item's `<source>`, the Google link as given,
+  title and summary (HTML stripped, same caps), the same time rules
+  (`published_at` / `fetched_at` / `available_at`), `symbols = [target]` and
+  **`match_confidence`**: `low` if the clean name is one word or doesn't appear in the title
+  or summary (case-insensitive), otherwise `high`. An article already stored for another
+  company gains that symbol with `$addToSet`; nothing else changes.
+- **Runs:** one `ingestion_run(job="company_news", source="google_news")`; `rows_written` =
+  new documents; `partial` if some companies failed or a block stopped the round after
+  something was fetched. Source health treats `google_news` as one source (all rules, plus
+  `blocked`).
 
 ## Health check
 
@@ -636,6 +695,7 @@ Data Health page (no secrets; hosts may appear).
   and `health --json` (no FAIL allowed). It runs only when a path in its filter changes:
   `docker/`, the `db`, `mongo` and `sources` packages, `db_check.py`, `health.py`,
   `ingestion.py`, `instruments.py`, `watchlist.py`, `news.py`, `source_health.py`,
+  `rate_limit.py`,
   `config/news_feeds.toml`, `mongo_setup.py`,
   `config.py`, `migrations/`, `alembic.ini`, `tests/integration/`, `pyproject.toml`, `uv.lock`
   and the workflow file.
@@ -656,7 +716,8 @@ Data pipeline: instruments and daily candles, `ingestion_runs`, `data_gaps`, the
 Built as tasks 1.0 to 1.10 (see [progress](progress.md)). The groundwork from 1.0 is described
 in [Data sources, rate limits and ingestion runs](#data-sources-rate-limits-and-ingestion-runs);
 instruments and the watchlist (1.1) in [Instruments and watchlist](#instruments-and-watchlist);
-news (1.2) in [News and exchange feeds](#news-and-exchange-feeds) and
+news (1.2) in [News and exchange feeds](#news-and-exchange-feeds),
+[Per-company news (Google News RSS)](#per-company-news-google-news-rss) (1.2b) and
 [Source health](#source-health). What each factor is and when it's built:
 [factor map](factors.md).
 
