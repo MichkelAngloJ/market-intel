@@ -5,7 +5,9 @@
         run.add_rows(len(rows))
 
 - On entry: a row with ``status = 'running'`` (job, source, params) is inserted and committed.
-- On success: ``finished_at``, ``status = 'success'`` and ``rows_written``.
+- On success: ``finished_at``, ``status = 'success'`` and ``rows_written``. If the job called
+  ``run.mark_partial(reason)`` (some parts failed, others worked): ``status = 'partial'`` with
+  the masked reason in ``error``.
 - On any error (also Ctrl+C): ``status = 'failed'``, ``finished_at``, the rows counted so far
   and a MASKED error text; then the exception is re-raised unchanged.
 
@@ -39,12 +41,19 @@ class Run:
         self.job = job
         self.source = source
         self.rows_written = 0
+        self.partial_reason: str | None = None
 
     def add_rows(self, n: int) -> None:
         """Count rows the job has written (inserted or updated)."""
         if n < 0:
             raise ValueError("rows written can't be negative")
         self.rows_written += n
+
+    def mark_partial(self, reason: str) -> None:
+        """Finish as ``partial`` instead of ``success``: some parts failed, others worked."""
+        if not reason:
+            raise ValueError("a partial run needs a reason")
+        self.partial_reason = reason
 
 
 def masked_error(exc: BaseException, url: str | None = None) -> str:
@@ -108,6 +117,21 @@ def ingestion_run(
                 )
             log.error("ingestion_run_failed", run=run_id, job=job, error=error)
             raise
+        if run.partial_reason is not None:
+            reason = mask_text(run.partial_reason)[:ERROR_MAX_CHARS]
+            conn.execute(
+                "UPDATE ingestion_runs SET status = 'partial', finished_at = now(),"
+                " rows_written = %s, error = %s WHERE id = %s",
+                (run.rows_written, reason, run_id),
+            )
+            log.warning(
+                "ingestion_run_partial",
+                run=run_id,
+                job=job,
+                rows_written=run.rows_written,
+                reason=reason,
+            )
+            return
         conn.execute(
             "UPDATE ingestion_runs SET status = 'success', finished_at = now(),"
             " rows_written = %s WHERE id = %s",

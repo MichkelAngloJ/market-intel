@@ -76,6 +76,9 @@ NEWS_ITEMS_SCHEMA = _object(
         "title",
         "published_at",
         "fetched_at",
+        "available_at",
+        "published_at_source",
+        "kind",
         "language",
         "symbols",
     ],
@@ -89,6 +92,23 @@ NEWS_ITEMS_SCHEMA = _object(
         "summary": _nullable(STR),
         "published_at": DATE,
         "fetched_at": DATE,
+        "available_at": DATE,
+        "published_at_source": _enum("feed", "fetched", "clamped"),
+        "kind": _enum("news", "exchange"),
+        "publisher": _nullable(STR),
+        "feed_name": _nullable(STR),
+        "exchange_meta": _nullable(
+            _object(
+                ["exchange"],
+                {
+                    "exchange": STR,
+                    "company_raw": _nullable(STR),
+                    "symbol_raw": _nullable(STR),
+                    "subject": _nullable(STR),
+                    "attachment_url": _nullable(STR),
+                },
+            )
+        ),
         "language": STR,
         "symbols": STR_LIST,
     },
@@ -272,6 +292,8 @@ NEWS_ITEMS = CollectionSpec(
         IndexSpec("uq_url_hash", (("url_hash", ASC),), unique=True),
         IndexSpec("ix_published_at", (("published_at", DESC),)),
         IndexSpec("ix_symbols_published_at", (("symbols", ASC), ("published_at", DESC))),
+        IndexSpec("ix_available_at", (("available_at", DESC),)),
+        IndexSpec("ix_kind_available_at", (("kind", ASC), ("available_at", DESC))),
     ),
 )
 LLM_EXTRACTIONS = CollectionSpec(

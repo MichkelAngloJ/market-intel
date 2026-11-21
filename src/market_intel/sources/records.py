@@ -29,7 +29,14 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from market_intel.db.schema import CANDLE_SOURCES, PRICE_BASES
-from market_intel.mongo.models import NewsItem, UtcDatetime
+from market_intel.mongo.models import (
+    ExchangeMeta,
+    NewsItem,
+    NewsKind,
+    PublishedAtSource,
+    UtcDatetime,
+    utc_now,
+)
 
 FAKE_TAG = "fake"
 
@@ -126,9 +133,16 @@ class NewsRecord(Record):
     url: str
     title: str = Field(min_length=1)
     summary: str | None = None
-    published_at: UtcDatetime  # when it became public: the leakage-safe time
+    published_at: UtcDatetime  # when the source says it became public
+    fetched_at: UtcDatetime = Field(default_factory=utc_now)
+    published_at_source: PublishedAtSource = "feed"
+    kind: NewsKind = "news"
+    publisher: str | None = None
+    feed_name: str | None = None
+    exchange_meta: ExchangeMeta | None = None
     language: str = "en"
     symbols: list[str] = Field(default_factory=list)
 
     def to_document(self) -> NewsItem:
+        """The validated MongoDB model; ``available_at`` = max(published_at, fetched_at)."""
         return NewsItem(**self.model_dump())

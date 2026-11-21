@@ -21,6 +21,8 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    TypeAdapter,
+    ValidationError,
     model_validator,
 )
 
@@ -47,6 +49,7 @@ def _canonical_uuid(value: str) -> str:
 UtcDatetime = Annotated[AwareDatetime, AfterValidator(_to_utc)]
 ObjectIdField = Annotated[ObjectId, BeforeValidator(_to_object_id)]
 UuidStr = Annotated[str, AfterValidator(_canonical_uuid)]
+_UTC: TypeAdapter[datetime] = TypeAdapter(UtcDatetime)
 
 Signal = Literal["up", "down", "hold"]
 Horizon = Literal["15m", "1h", "eod", "1M", "3M", "6M"]
@@ -102,6 +105,22 @@ def url_hash(url: str) -> str:
     return hashlib.sha256(normalise_url(url).encode("utf-8")).hexdigest()
 
 
+NewsKind = Literal["news", "exchange"]
+# Where published_at came from: the feed's own date, the fetch time (the feed gave none), or
+# the fetch time because the feed's date was more than 5 minutes in the future.
+PublishedAtSource = Literal["feed", "fetched", "clamped"]
+
+
+class ExchangeMeta(_Strict):
+    """What an exchange announcement says about itself, as given by the feed (raw text)."""
+
+    exchange: str  # NSE or BSE
+    company_raw: str | None = None
+    symbol_raw: str | None = None  # the exchange's own code: an NSE symbol or a BSE scrip code
+    subject: str | None = None
+    attachment_url: str | None = None  # stored only; never downloaded
+
+
 class NewsItem(Document):
     source: str
     feed_url: str
@@ -109,8 +128,16 @@ class NewsItem(Document):
     url_hash: str  # filled in from ``url`` if not given
     title: str
     summary: str | None = None
-    published_at: UtcDatetime  # when it became public: the leakage-safe time
-    fetched_at: UtcDatetime = Field(default_factory=utc_now)
+    published_at: UtcDatetime  # when the source says it became public
+    fetched_at: UtcDatetime = Field(default_factory=utc_now)  # when we first fetched it
+    # When OUR system could know it: max(published_at, fetched_at). Phase 2 features use this.
+    # Filled in if not given; a given value must equal that maximum.
+    available_at: UtcDatetime
+    published_at_source: PublishedAtSource = "feed"
+    kind: NewsKind = "news"
+    publisher: str | None = None
+    feed_name: str | None = None
+    exchange_meta: ExchangeMeta | None = None
     language: str = "en"
     symbols: list[str] = Field(default_factory=list)
 
@@ -124,6 +151,30 @@ class NewsItem(Document):
                 raise ValueError("url_hash does not match the normalised url")
             data = {**data, "url_hash": computed}
         return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_times(cls, data: Any) -> Any:
+        # fetched_at's default must exist before available_at can be computed from it.
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if data.get("fetched_at") is None:
+            data["fetched_at"] = utc_now()
+        if data.get("available_at") is None and data.get("published_at") is not None:
+            try:
+                published = _UTC.validate_python(data["published_at"])
+                fetched = _UTC.validate_python(data["fetched_at"])
+            except ValidationError:
+                return data  # the field validators report the real error
+            data["available_at"] = max(published, fetched)
+        return data
+
+    @model_validator(mode="after")
+    def _check_available_at(self) -> NewsItem:
+        if self.available_at != max(self.published_at, self.fetched_at):
+            raise ValueError("available_at must be max(published_at, fetched_at)")
+        return self
 
 
 # --- llm_extractions -------------------------------------------------------------------------
