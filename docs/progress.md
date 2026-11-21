@@ -1,11 +1,12 @@
 # Progress
 
-Last updated: 2026-11-21, HEAD 3938cd5. Updated at the end of every task (see
+Last updated: 2026-11-22, HEAD c31dfe5. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
 
-- Phase 1 (stock data pipeline). Now: 1.1 (instruments and watchlist) in progress. 0.11 (remove the testing-laptop dependency) stays planned
+- Phase 1 (stock data pipeline). Now: 1.1 (instruments and watchlist) done, awaiting planner
+  review. Next: 1.2 (news RSS). 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21; one session per task): 1.0 groundwork; 1.1
   instruments and watchlist; 1.2 news RSS; 1.3 Upstox login and token; 1.4 daily candles with
@@ -96,8 +97,8 @@ Last updated: 2026-11-21, HEAD 3938cd5. Updated at the end of every task (see
 | 0.10 | done 2026-11-21 (HEAD 4eb9574) | passed (planner, 2026-11-21) | Phase 0 wrap-up: `backup_age` health check and `BACKUP_MAX_AGE_DAYS`; Phase 0 review; spec (cloud databases, AI access through MCP); tag `phase-0` |
 | 0.11 | planned (not before 2026-12-03) | – | Remove testing-laptop dependency (hand-back checklist, cloud databases per the 0.10 decision, two-laptop docs) |
 | 1.0 | done 2026-11-21 (HEAD 3938cd5) | passed (planner, 2026-11-22) | Groundwork: one log file per component; background alerts with a bounded exit flush and a locked throttle; `market_intel.sources` interface, typed records and a fake source; multi-window rate limiter with Upstox defaults and 429 back-off; `ingestion_run` helper |
-| 1.1 | in progress | – | Instruments and watchlist |
-| 1.2 | planned | – | News RSS |
+| 1.1 | done 2026-11-22 (HEAD c31dfe5) | awaiting planner review | Instruments from Upstox's public NSE file (EQ, BE, indices) with conditional GET, size caps, safety valve and symbol history; sector import from the Nifty 500 list CSV; watchlist (max 50, database only); migration 0004; strict URL masking in logs; cloud MongoDB access decision logged |
+| 1.2 | next | – | News RSS |
 | 1.3 | planned | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -109,21 +110,28 @@ Last updated: 2026-11-21, HEAD 3938cd5. Updated at the end of every task (see
 
 ## State
 
-- Main laptop (`full`): local Docker databases at migration 0003, MongoDB collections and
-  validators set up; `db_check` OK; health overall OK (9 OK, 4 SKIP; `mongo_rights_probe` OK,
-  refusal code 13; `backup_age` OK after a fresh backup). Backup with manifest and restore test OK (restored counts match the manifest, SHA-256
+- Main laptop (`full`): local Docker databases at migration 0004 (applied 2026-11-22 after CI
+  and compose-smoke were green), MongoDB collections and validators set up; `db_check` OK;
+  health overall OK (10 OK, 3 SKIP; `data_freshness` OK with the instruments refresh;
+  `mongo_rights_probe` OK, refusal code 13; `backup_age` OK). Backup with manifest and restore test OK (restored counts match the manifest, SHA-256
   values match); backups in `BACKUP_DIR`, outside the repo. The very first backup there was
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
-- Phase 1 groundwork (1.0) in place, no real data source yet: logs in `logs/<component>.jsonl`;
+- Instruments (1.1): first real refresh 2026-11-22 kept 3102 (EQ 2779, BE 184, indices 139),
+  0 malformed; a second run was "not modified"; a run from the saved file made 0 changes.
+  No sectors yet (the owner's sector import is pending). Watchlist empty (the demo removed
+  both rows). Backup and `backup --verify` after the refresh: restored counts match the
+  manifest (`instruments` 3102), SHA-256 values match.
+- Phase 1 groundwork (1.0) in place: logs in `logs/<component>.jsonl`;
   `queue_alert` sends in the background; `market_intel.sources`, `market_intel.rate_limit` and
-  `market_intel.ingestion` exist. The ingestion-run integration test passes through the app
-  login on the local databases and leaves no rows (`data_freshness` still SKIP).
+  `market_intel.ingestion` exist. Integration tests pass through the app login on the local
+  databases and leave no rows (the instrument tests run in a transaction that is rolled back).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
-- CI and compose-smoke green at 7c7f966 (all 0.10 code; compose-smoke shows `backup_age`
-  WARN there, as expected with no backup folder). The final commit's CI result is in the 0.10
+- CI (run 44937985801) and compose-smoke (run 44937985831) green at e7a0438, the last 1.1
+  code commit: 0004 up, down and up, `alembic check` with no drift, 33 integration tests, the
+  fake-file refresh twice (second run 0 changes). The docs commits' CI result is in the 1.1
   report.
 
 ## Carry-forward items
@@ -139,13 +147,17 @@ Last updated: 2026-11-21, HEAD 3938cd5. Updated at the end of every task (see
   collection also needs its role row added in the running local database. The runbook's
   "Adding a MongoDB collection" checklist doesn't say how yet; settle it with the first new
   collection.
-- The MongoDB provider accepts only known networks: add each new network's IP.
+- The cloud MongoDB accepts any address (decision 2026-11-20): passwords stay only in `.env`
+  and are changed at once if exposed; the cloud databases are deleted in 0.11.
+- Testing laptop: its cloud Postgres needs `uv run alembic upgrade head` (0004) the next
+  time it is used (after `git pull`, before running the instruments refresh there).
+- 1.4: add a `partial` run status to `ingestion_run` (planner, 1.0 review).
+- Owner: download the Nifty 500 list CSV by hand and run `instruments import-sectors`
+  (dry run first); see the runbook (Instruments and watchlist).
 - Before the testing laptop is handed back: log out of GitHub CLI, revoke its token, delete
-  its `.env`, remove its network from the MongoDB access list.
+  its `.env`.
 - Main laptop: quit Docker Desktop when not using local databases (it holds 6 GB).
 - Main laptop: back up after work days and copy `BACKUP_DIR` to external storage weekly; once
   ingestion starts and the cloud databases are deleted (0.11), these are the only copies.
 - Before AI first queries project data (Phase 2 at the latest): plan the MCP connection
   task (free, read-only login, local only).
-- Re-run `backup --verify` after the first Phase 1 ingestion: so far the local databases are
-  empty apart from `alembic_version`, so the restore test compared mostly zero counts.
