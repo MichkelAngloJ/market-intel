@@ -112,6 +112,8 @@ instruments = Table(
     # IST dates of the first and latest instrument refresh that listed this instrument (0004).
     Column("first_seen_on", Date),
     Column("last_seen_on", Date),
+    # BSE scrip code (from Upstox's public BSE file, matched by ISIN; 0005). Unique when set.
+    Column("bse_code", Text),
     # A symbol is unique among ACTIVE instruments only, so it can be reused after the old
     # instrument goes inactive (0004; replaced UNIQUE (exchange, segment, symbol)).
     Index(
@@ -121,6 +123,12 @@ instruments = Table(
         "symbol",
         unique=True,
         postgresql_where=text("is_active"),
+    ),
+    Index(
+        "uq_instruments_bse_code",
+        "bse_code",
+        unique=True,
+        postgresql_where=text("bse_code IS NOT NULL"),
     ),
 )
 
