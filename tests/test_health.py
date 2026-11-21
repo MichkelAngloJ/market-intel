@@ -260,6 +260,7 @@ def test_all_good_statuses(env):
         "laptop": "OK",
         "backup_age": "OK",
         "data_freshness": "SKIP",
+        "sources": "SKIP",
         "upstox_token": "SKIP",
         "llm_spend": "OK",
     }

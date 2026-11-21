@@ -29,7 +29,7 @@ from typing import Any, Literal
 
 from pymongo.errors import OperationFailure, PyMongoError
 
-from market_intel import backup, mongo_setup
+from market_intel import backup, mongo_setup, source_health
 from market_intel.alerts import AlertSender
 from market_intel.config import REPO_ROOT, ConfigError, Settings, get_settings, required_fields
 from market_intel.db import mongo, postgres
@@ -43,6 +43,7 @@ from market_intel.logging_setup import (
 )
 from market_intel.mongo import access, audit
 from market_intel.mongo.schemas import COLLECTIONS
+from market_intel.sources.rss import load_feeds
 
 log = get_logger("market_intel.health")
 
@@ -463,6 +464,24 @@ def check_data_freshness(ctx: Context) -> CheckResult:
     return CheckResult("data_freshness", "OK", f"last run {job}: {status} at {when}", details)
 
 
+def check_sources(ctx: Context) -> CheckResult:
+    """WARN while an enabled source has an active problem (see market_intel.source_health)."""
+    settings = ctx.settings
+    state = source_health.load_state(source_health.state_path(settings.data_dir))
+    enabled = [f.source for f in load_feeds(settings.news_feeds_file) if f.enabled]
+    seen = [name for name in enabled if name in state]
+    if not seen:
+        return CheckResult("sources", "SKIP", "no source fetched yet")
+    problems = source_health.active_problems(settings.data_dir, enabled)
+    details = {"sources": len(seen), "problems": {k: sorted(v) for k, v in problems.items()}}
+    if problems:
+        listed = "; ".join(
+            f"{name}: {', '.join(sorted(rules))}" for name, rules in problems.items()
+        )
+        return CheckResult("sources", "WARN", f"{len(problems)} with problems: {listed}", details)
+    return CheckResult("sources", "OK", f"{len(seen)} sources, no active problems", details)
+
+
 def check_upstox_token(ctx: Context) -> CheckResult:
     return CheckResult("upstox_token", "SKIP", "not set up (Phase 1)")
 
@@ -501,6 +520,7 @@ CHECKS: tuple[tuple[str, Callable[[Context], CheckResult]], ...] = (
     ("laptop", check_laptop),
     ("backup_age", check_backup_age),
     ("data_freshness", check_data_freshness),
+    ("sources", check_sources),
     ("upstox_token", check_upstox_token),
     ("llm_spend", check_llm_spend),
 )
