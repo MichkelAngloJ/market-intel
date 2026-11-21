@@ -5,8 +5,7 @@ Last updated: 2026-11-21, HEAD 3938cd5. Updated at the end of every task (see
 
 ## Current
 
-- Phase 1 (stock data pipeline). Now: 1.0 (groundwork) done, awaiting planner review. Next:
-  1.1 (instruments and watchlist). 0.11 (remove the testing-laptop dependency) stays planned
+- Phase 1 (stock data pipeline). Now: 1.1 (instruments and watchlist) in progress. 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21; one session per task): 1.0 groundwork; 1.1
   instruments and watchlist; 1.2 news RSS; 1.3 Upstox login and token; 1.4 daily candles with
@@ -25,6 +24,10 @@ Last updated: 2026-11-21, HEAD 3938cd5. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- 1.0 review (planner, 2026-11-22): passed. Verified CI, tests, health, unchanged old tests
+  and decisions, privacy; read the alerts, file_lock, rate_limit and ingestion code. Open
+  questions: (1) log masking hides URL user names too: done in 1.1 part A; (2) a "partial" run
+  status: in 1.4.
 - 0.10 review (planner, 2026-11-21): passed. Verified: tag `phase-0` on b661d98, local and
   remote; CI green at b661d98; compose-smoke green at 7c7f966; health overall OK with
   `backup_age` OK; the review is honest and specific; privacy clean; old decision entries
@@ -92,8 +95,8 @@ Last updated: 2026-11-21, HEAD 3938cd5. Updated at the end of every task (see
 | 0.9b | done 2026-11-21 (HEAD 3961a2b) | passed (planner, 2026-11-21) | Local Docker databases on the main laptop (migrated, set up, backup with manifest and restore test); commit-email guard (hook + CI history test) |
 | 0.10 | done 2026-11-21 (HEAD 4eb9574) | passed (planner, 2026-11-21) | Phase 0 wrap-up: `backup_age` health check and `BACKUP_MAX_AGE_DAYS`; Phase 0 review; spec (cloud databases, AI access through MCP); tag `phase-0` |
 | 0.11 | planned (not before 2026-12-03) | – | Remove testing-laptop dependency (hand-back checklist, cloud databases per the 0.10 decision, two-laptop docs) |
-| 1.0 | done 2026-11-21 (HEAD 3938cd5) | awaiting planner review | Groundwork: one log file per component; background alerts with a bounded exit flush and a locked throttle; `market_intel.sources` interface, typed records and a fake source; multi-window rate limiter with Upstox defaults and 429 back-off; `ingestion_run` helper |
-| 1.1 | next | – | Instruments and watchlist |
+| 1.0 | done 2026-11-21 (HEAD 3938cd5) | passed (planner, 2026-11-22) | Groundwork: one log file per component; background alerts with a bounded exit flush and a locked throttle; `market_intel.sources` interface, typed records and a fake source; multi-window rate limiter with Upstox defaults and 429 back-off; `ingestion_run` helper |
+| 1.1 | in progress | – | Instruments and watchlist |
 | 1.2 | planned | – | News RSS |
 | 1.3 | planned | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
