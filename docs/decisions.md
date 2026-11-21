@@ -264,3 +264,13 @@
 - Decision: The cloud MongoDB network access list is "allow from anywhere". Protection is the generated passwords, TLS on every connection (the code refuses unencrypted ones) and the limited app login. It replaces the 0.4 rule "network access = current IP only".
 - Concern (planner): A leaked connection string would work from any network, so passwords stay only in .env and are changed at once if exposed. The cloud databases are deleted in 0.11, which ends this exposure.
 - Reason (owner): The home ISP shares IPv4 addresses (CGNAT), so database traffic left through a different address than the browser and single-address entries kept breaking.
+
+## 2026-11-22 - Instruments and watchlist
+- Decision: Instruments come from Upstox's public daily instrument file (NSE.json.gz, no login): NSE stocks of series EQ and BE plus all NSE indices, refreshed by one command inside an ingestion run. Rows are never deleted: a missing instrument becomes inactive, symbol changes are kept in instrument_symbol_history, and a symbol can be reused only by an active instrument. A safety valve refuses a refresh whose file is much smaller than the active list. Sectors come from a Nifty 500 list CSV that the owner downloads by hand and imports with a command. The watchlist (max 50) lives only in the database.
+- Concern (planner): BE stocks are often under exchange surveillance and riskier; they are flagged, not hidden. Absence from the file isn't proof of delisting. Stocks outside the Nifty 500 have no sector yet. Choosing watchlist stocks is the owner's decision; the system doesn't recommend.
+- Reason (owner): One official, free source with the same keys as the candle API, and private picks stay out of the public repo.
+
+## 2026-11-22 - Strict URL masking in logs
+- Decision: Logs hide the whole user part of any URL (user name and password), the same as stored ingestion errors.
+- Concern (planner): None.
+- Reason (owner): Accepted the 1.0 review answer; user names must not appear in output.

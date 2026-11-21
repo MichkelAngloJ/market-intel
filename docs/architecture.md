@@ -36,7 +36,8 @@ flowchart LR
     GH --> SMOKE[compose-smoke with Docker databases]
     COLAB[Colab - later] -->|git clone| GH
 
-    UPSTOX[Upstox - planned] -.-> CLI
+    UPFILE[Upstox public instrument file] -->|daily refresh| CLI
+    UPSTOX[Upstox API - planned] -.-> CLI
     YF[yfinance - planned] -.-> CLI
     RSS[RSS news - planned] -.-> CLI
     LLM[LLMs - planned] -.-> CLI
@@ -84,6 +85,9 @@ flowchart LR
 | `alembic upgrade head` | Applies Postgres migrations (owner login) |
 | `python -m market_intel.mongo_setup` | Creates or updates MongoDB collections (setup login) |
 | `python -m market_intel.backup` | Backs up the local Docker databases (`--verify`: restore test); `full` profile only |
+| `python -m market_intel.instruments refresh` | Refreshes NSE instruments from Upstox's public file (`--file`, `--dry-run`) |
+| `python -m market_intel.instruments import-sectors PATH` | Sets sectors from the hand-downloaded Nifty 500 list CSV (`--dry-run`) |
+| `python -m market_intel.watchlist add`, `remove`, `list` | The watchlist (max 50 stocks), stored only in the database |
 
 All are run with `uv run` in front.
 
@@ -140,7 +144,7 @@ see `src/market_intel/config.py`.
 | `.env` (secrets and machine settings) | Each laptop, copied by hand | **Never** |
 | `docker/compose.env` (Docker database passwords) | The main laptop | **Never** |
 | `logs/` | JSON log files on each laptop, one per component (`LOG_DIR`) | Never |
-| `data/` | Local data and state, e.g. `data/state/alert_throttle.json` (`DATA_DIR`) | Never |
+| `data/` | Local data and state, e.g. `data/state/alert_throttle.json` and the downloaded instrument files in `data/raw/upstox/instruments/` (`DATA_DIR`) | Never |
 | `drive_sync/` | Local folder for exports and backups | Never |
 | Postgres tables | The Postgres database (see [Postgres schema v1](#postgres-schema-v1)) | No |
 | MongoDB collections | The MongoDB database (see [MongoDB](#mongodb)) | No |
@@ -220,8 +224,9 @@ could be any machine on the network, so it needs TLS.
 - Secrets live only in `.env` and `docker/compose.env`, both git-ignored; `.env.example` and
   `docker/compose.env.example` hold names with empty values (a test checks this).
 - Logs and alert output mask: values of fields whose names look secret (`key`, `secret`,
-  `password`, `token`, `uri`, `url`, ...), passwords inside connection URLs, and every secret
-  value loaded from `.env`. Database error messages are also redacted; only hosts are shown.
+  `password`, `token`, `uri`, `url`, ...), the whole user part of any URL (user name and
+  password become `scheme://***@host`; decision 2026-11-22), and every secret value loaded
+  from `.env`. Database error messages are also redacted; only hosts are shown.
   Alert recipients appear as `m***@domain`.
 - Every commit runs detect-secrets (pre-commit). GitHub secret scanning and push protection
   are on. Safety tests fail if `.env` files, data folders, data file types, files over 1 MB or
@@ -270,11 +275,14 @@ could be any machine on the network, so it needs TLS.
 ## Postgres schema v1
 
 Defined in `src/market_intel/db/schema.py` (SQLAlchemy Core) and created by Alembic migrations
-in `migrations/` (0001 schema, 0002 grants for `mi_app`, 0003 trigger and TEMP grant).
+in `migrations/` (0001 schema, 0002 grants for `mi_app`, 0003 trigger and TEMP grant, 0004
+instrument seen dates, symbol reuse, symbol history and watchlist).
 
 | Table | Holds |
 |---|---|
-| `instruments` | One row per tradable symbol: exchange, segment, symbol, ISIN, Upstox key, sector |
+| `instruments` | One row per tradable symbol: exchange, segment, symbol, ISIN, Upstox key, sector, first and last seen dates |
+| `instrument_symbol_history` | Every symbol change a refresh saw: old and new symbol, IST date |
+| `watchlist` | The owner's watchlist (max 50 stocks, note up to 200 characters); its contents never go in the repo |
 | `candles_daily` | Daily OHLCV per instrument and IST trading date, with source and raw/adjusted flag |
 | `candles_intraday` | 1-minute bars only (start time in UTC) |
 | `ingestion_runs` | Every data-loading run: job, status, rows written, masked error |
@@ -292,6 +300,10 @@ Key rules:
   time columns. Tables are designed so they could become TimescaleDB hypertables later
   (plain Postgres for now).
 - A trigger (`set_updated_at`) keeps `instruments.updated_at` current on every update.
+- A symbol is unique per exchange and segment **among active instruments only** (a partial
+  unique index, 0004), so a symbol can be reused after the old instrument goes inactive.
+- `mi_app` gets its rights on new tables from the default privileges set in 0002; no
+  migration grants rights by itself.
 
 **Migration policy:** migrations never run automatically. They are applied by hand with the
 owner login, only after CI is green (`alembic upgrade head`). Downgrades drop tables and data,
@@ -368,7 +380,9 @@ validators and indexes are listed in `src/market_intel/mongo/schemas.py`. Every 
 
 ## Data sources, rate limits and ingestion runs
 
-Phase 1 groundwork (task 1.0). No real source exists yet; they arrive in tasks 1.1 to 1.7.
+Phase 1 groundwork (task 1.0). The first real source, Upstox's public instrument file, came
+in 1.1 (see [Instruments and watchlist](#instruments-and-watchlist)); the others arrive in
+tasks 1.2 to 1.7.
 
 - **One interface** (`market_intel.sources.DataSource`): every source has a stable **source
   tag** and offers some of four kinds of data: instruments, daily candles, intraday candles,
@@ -401,11 +415,65 @@ Phase 1 groundwork (task 1.0). No real source exists yet; they arrive in tasks 1
   - On success: `finished_at`, status `success` and `rows_written` (the job counts rows with
     `run.add_rows(n)`).
   - On any error, including Ctrl+C: status `failed`, `finished_at`, the rows counted so far
-    and a **masked** error (`Type: message`, with user names and passwords in URLs and loaded
-    secrets removed, at most 2000 characters; stricter than log masking, which keeps user
-    names); then the exception is re-raised unchanged. Secret-looking params
-    are masked before they're stored.
+    and a **masked** error (`Type: message`, with the whole user part of URLs and loaded
+    secrets removed, the same rule as logs, at most 2000 characters); then the exception is
+    re-raised unchanged. Secret-looking params are masked before they're stored.
   - Health's `data_freshness` check reads the latest row.
+
+## Instruments and watchlist
+
+Task 1.1 (decision 2026-11-22). Commands: `market_intel.instruments` and
+`market_intel.watchlist`; each logs to its own file (`logs/instruments.jsonl`,
+`logs/watchlist.jsonl`).
+
+- **Source:** Upstox's public instrument file for NSE (`NSE.json.gz`, no login, refreshed daily
+  around 06:00 IST; `UPSTOX_INSTRUMENTS_URL`). It uses the same `instrument_key` as Upstox's
+  candle API. Module: `market_intel.sources.upstox_instruments`.
+- **Download:** a conditional GET (ETag / If-Modified-Since; "not modified" means nothing to
+  do), a timeout and the User-Agent `market-intel`. The file is saved as
+  `data/raw/upstox/instruments/NSE-<YYYYMMDD>.json.gz` and the newest 7 are kept. The ETag is
+  remembered only after the database refresh has committed, so a refused or failed refresh
+  downloads in full next time.
+- **Untrusted file:** compressed size at most 50 MB; stream-decompressed with a hard 300 MB
+  cap; parsed with the `json` module only, never executed or evaluated. Each kept object is
+  validated into an `Instrument` record tagged `upstox`; malformed objects (and duplicates)
+  are skipped and counted.
+- **Filter:** NSE stocks (segment `NSE_EQ`) of series EQ and BE, and every NSE index
+  (`NSE_INDEX`). Everything else is skipped and counted by segment. Stored as exchange `NSE`,
+  segment `EQ` or `INDEX`, series = the file's `instrument_type` (NULL for indices). Upstox
+  gives tick sizes in paise; the table stores rupees.
+- **Refresh rules** (`instruments refresh`, inside `ingestion_run(job="instruments_refresh",
+  source="upstox")`, one transaction with the app login):
+  - Keyed by `instrument_key`. New rows get `first_seen_on`; every listed row gets
+    `last_seen_on` = today (IST). Rows are updated only when something changed, so a second
+    run on the same file makes 0 changes (`last_seen_on` alone isn't counted as a change).
+  - A changed symbol writes an `instrument_symbol_history` row.
+  - Instruments missing from the file become **inactive**. Rows are never deleted and
+    `delisted_on` stays NULL, because absence isn't proof of delisting. A listed inactive
+    instrument becomes active again.
+  - Order of writes: missing rows and rows changing symbol go inactive first, then the
+    updates, then the inserts, so the unique index on active symbols holds even when two
+    symbols swap.
+  - **Safety valve:** if the file keeps fewer than `INSTRUMENTS_MIN_KEEP_RATIO` (default 0.8)
+    x the currently active instruments, and some are active, nothing changes: the run is
+    marked failed and a WARNING alert "Instrument refresh refused: file too small" is queued.
+  - The summary shows inserted, updated, symbol changes, deactivated, reactivated, skipped by
+    segment and malformed, plus the counts of EQ, BE and indices. `--dry-run` downloads in
+    full, rolls everything back and records no run. `--file` uses a local file instead.
+- **BE stocks** (trade-to-trade, often under exchange surveillance, riskier) are flagged, not
+  hidden.
+- **Sectors** (`instruments import-sectors PATH`): the owner downloads the "Nifty 500" list
+  CSV from the NSE Indices website by hand (no scraping, no automated download). The headers
+  must be exactly `Company Name, Industry, Symbol, Series, ISIN Code`; otherwise nothing
+  changes. Rows match active NSE stocks by ISIN (fallback: symbol with series EQ); `sector` =
+  the CSV's Industry value (NSE's broad classification). Empty values never overwrite. Stocks
+  outside the Nifty 500 have no sector.
+- **Watchlist** (`watchlist add SYMBOL [--note TEXT] | remove SYMBOL | list`): active NSE
+  stocks of series EQ or BE only (indices are refused), at most 50 (the 51st is refused; a
+  short table lock makes the check race-free), with a note of up to 200 characters. Adding a
+  BE stock prints a risk note. The list lives **only in the database**: never in the repo or
+  the docs, and the log records counts only. Choosing stocks is the owner's decision; the
+  system doesn't recommend.
 
 ## Health check
 
@@ -459,12 +527,12 @@ Data Health page (no secrets; hosts may appear).
   - **Python 3.12 pin:** the project requires Python 3.12. Colab's newest runtime uses Python
     3.13, so pick runtime version **2026.07** (Python 3.12) under *Runtime > Change runtime
     type > Runtime version* until Phase 3 decides.
-  - How training data reaches Colab is decided in Phase 3. The cloud MongoDB accepts only
-    allow-listed networks, so Colab can't reach it.
+  - How training data reaches Colab is decided in Phase 3. The cloud MongoDB accepts any
+    address (decision 2026-11-20) but is deleted in 0.11, so Colab can't rely on it.
 - **Main laptop (`full` profile, since 0.9b):** the same versions, Postgres 18 and MongoDB 8.0,
   in Docker (`docker/compose.yaml`, passwords in `docker/compose.env`). Ports are bound to
   127.0.0.1 only and each container is capped at 2 GB of memory. The databases started fresh,
-  were migrated to head (0003) and set up with `mongo_setup`; the app connects with the same
+  were migrated (to 0004 since 1.1) and set up with `mongo_setup`; the app connects with the same
   limited logins as in the cloud.
   - **Backups:** `python -m market_intel.backup` writes one Postgres dump (`pg_dump`, custom
     format), one MongoDB archive (`mongodump`, gzip) and a JSON manifest to `BACKUP_DIR`,
@@ -491,10 +559,12 @@ Data Health page (no secrets; hosts may appear).
   the commit-email guard skips itself in CI) and pytest.
 - **`compose-smoke.yml`** starts Postgres 18 and MongoDB 8.0 in Docker with throwaway
   passwords, then runs `mongo_setup` twice (the second run must change nothing), the
-  migrations up, down to base and up again, `alembic check`, the integration tests, `db_check`
+  migrations up, down to base and up again, `alembic check`, the integration tests, the
+  instruments refresh on a small fake file twice (the second run must make 0 changes),
+  `db_check`
   and `health --json` (no FAIL allowed). It runs only when a path in its filter changes:
-  `docker/`, the `db` and `mongo` packages, `db_check.py`, `health.py`, `ingestion.py`,
-  `mongo_setup.py`,
+  `docker/`, the `db`, `mongo` and `sources` packages, `db_check.py`, `health.py`,
+  `ingestion.py`, `instruments.py`, `watchlist.py`, `mongo_setup.py`,
   `config.py`, `migrations/`, `alembic.ini`, `tests/integration/`, `pyproject.toml`, `uv.lock`
   and the workflow file.
 - **Docs test** (`tests/test_docs.py`) checks links, the README length, Mermaid blocks and the
@@ -512,7 +582,8 @@ after the current one passes validation.
 
 Data pipeline: instruments and daily candles, `ingestion_runs`, `data_gaps`, the Upstox token.
 Built as tasks 1.0 to 1.10 (see [progress](progress.md)). The groundwork from 1.0 is described
-in [Data sources, rate limits and ingestion runs](#data-sources-rate-limits-and-ingestion-runs).
+in [Data sources, rate limits and ingestion runs](#data-sources-rate-limits-and-ingestion-runs);
+instruments and the watchlist (1.1) in [Instruments and watchlist](#instruments-and-watchlist).
 
 ### Phase 2 — Events and features
 

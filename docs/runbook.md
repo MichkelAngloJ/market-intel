@@ -14,14 +14,18 @@ All commands run from `<repo folder>` with `uv run` in front.
    [Local Docker databases](#local-docker-databases)).
 4. `uv run python -m market_intel.health` and fix anything that isn't OK or SKIP (see
    [Reading the health output](#reading-the-health-output)).
-5. Work.
-6. `uv run pytest` and `uv run pre-commit run --all-files`.
-7. `git push`, then check that CI is green.
-8. **On the `full` profile, after a work day:** back up
+5. **Instruments (once a day, after ~06:00 IST):** `ALERT_DRY_RUN=true uv run python -m
+   market_intel.instruments refresh` (drop `ALERT_DRY_RUN=true` once real alerts are wanted;
+   see [Instruments and watchlist](#instruments-and-watchlist)). From 1.8 the scheduler does
+   this.
+6. Work.
+7. `uv run pytest` and `uv run pre-commit run --all-files`.
+8. `git push`, then check that CI is green.
+9. **On the `full` profile, after a work day:** back up
    (`uv run python -m market_intel.backup`; see [Local Docker databases](#local-docker-databases)).
-9. **On the `full` profile:** when you're done with the databases, stop them and quit Docker
-   Desktop (see [Local Docker databases](#local-docker-databases)).
-10. **Weekly:** copy `BACKUP_DIR` to external storage (an external drive or your own cloud
+10. **On the `full` profile:** when you're done with the databases, stop them and quit Docker
+    Desktop (see [Local Docker databases](#local-docker-databases)).
+11. **Weekly:** copy `BACKUP_DIR` to external storage (an external drive or your own cloud
     storage). Once the cloud databases are deleted (0.11), these copies are the only ones away
     from the main laptop.
 
@@ -265,8 +269,10 @@ JSON object per line, times in UTC:
 | `market_intel.backup` | `logs/backup.jsonl` |
 | `market_intel.mongo_setup` | `logs/mongo_setup.jsonl` |
 | `market_intel.alerts --test` | `logs/alerts.jsonl` |
+| `market_intel.instruments` (refresh, sector import) | `logs/instruments.jsonl` |
+| `market_intel.watchlist` | `logs/watchlist.jsonl` (counts only, never symbols) |
 | Code that names no component | `logs/market_intel.jsonl` |
-| Phase 1 jobs (from 1.1) | `logs/<job name>.jsonl` |
+| Later Phase 1 jobs | `logs/<component>.jsonl`, named in each job's section |
 
 Each file rotates at UTC midnight on its own (older days get a date suffix; 30 are kept), so
 two programs running at once never block each other. Alerts that a program queued but
@@ -291,11 +297,60 @@ On the `full` profile the container's own login works without a password:
 `docker compose -f docker/compose.yaml --env-file docker/compose.env exec postgres sh -c
 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`, then the query above.
 
-Then open that job's log (`logs/<job name>.jsonl`) around `started_at`: its
+Then open that job's log (see the table above; `instruments_refresh` writes to
+`logs/instruments.jsonl`) around `started_at`: its
 `ingestion_run_failed` line has the same masked error, and the lines before it show what the
 job was doing. A row stuck at `running` with no `finished_at` means the process was killed
 before it could record the end (power off, a crash of Python itself); the next run of the job
 starts a new row.
+
+## Instruments and watchlist
+
+How it works: [architecture](architecture.md#instruments-and-watchlist). Commands that can
+alert run with `ALERT_DRY_RUN=true` until real alerts are wanted (in PowerShell set
+`$env:ALERT_DRY_RUN = "true"` first).
+
+| Task | Command |
+|---|---|
+| Daily refresh (after ~06:00 IST, when Upstox refreshes its file) | `ALERT_DRY_RUN=true uv run python -m market_intel.instruments refresh` |
+| See what a refresh would change, save nothing | `uv run python -m market_intel.instruments refresh --dry-run` |
+| Refresh from a local file instead of downloading | `uv run python -m market_intel.instruments refresh --file PATH` |
+| Monthly sector import, dry run first | `uv run python -m market_intel.instruments import-sectors PATH --dry-run` |
+| Sector import | `uv run python -m market_intel.instruments import-sectors PATH` |
+| Add a stock to the watchlist | `uv run python -m market_intel.watchlist add SYMBOL [--note TEXT]` |
+| Remove a stock | `uv run python -m market_intel.watchlist remove SYMBOL` |
+| Show the watchlist | `uv run python -m market_intel.watchlist list` |
+
+**Daily refresh.** It downloads Upstox's public NSE file (about 2.3 MB) only when it has
+changed; otherwise it prints "not modified ... nothing to do". The summary shows inserted,
+updated, symbol changes, deactivated, reactivated, skipped and malformed objects, and the
+counts of EQ, BE and indices. A second run on the same file makes 0 changes. Downloaded files
+stay in `data/raw/upstox/instruments/` (git-ignored, newest 7 kept).
+
+**"Instrument refresh refused: file too small".** The safety valve: the file keeps fewer than
+`INSTRUMENTS_MIN_KEEP_RATIO` (default 0.8) x the active instruments, so nothing was changed and
+the run is marked failed (health's `data_freshness` turns WARN). Usually Upstox published a
+broken or partial file: wait and run the refresh again later. If NSE really removed that many
+instruments, lower `INSTRUMENTS_MIN_KEEP_RATIO` in `.env` for one run, then empty it again.
+
+**Monthly sector import.** Sectors come from the Nifty 500 list, downloaded **by hand in a
+browser** (never scripted):
+
+1. On the NSE Indices website, open the Nifty 500 index page and download its constituent list
+   CSV (file name `ind_nifty500list.csv`).
+2. Keep it outside the repo, or in `data/` (git-ignored). Never commit it.
+3. Dry run: `uv run python -m market_intel.instruments import-sectors PATH --dry-run`. Check the
+   matched and unmatched counts.
+4. Import: the same command without `--dry-run`.
+
+The headers must be `Company Name, Industry, Symbol, Series, ISIN Code`. If NSE changes the
+format the import stops with "unexpected headers" and changes nothing; ask for a code update.
+Empty values never overwrite a sector, and stocks outside the Nifty 500 keep no sector.
+
+**Watchlist.** At most 50 active NSE stocks of series EQ or BE; indices are refused. Adding a BE
+stock prints a risk note (trade-to-trade, often under exchange surveillance). The list lives
+only in the database: never copy it into the repo, the docs or a planner prompt that ends up in
+the repo. Choosing stocks is the owner's decision.
 
 ## Common problems
 

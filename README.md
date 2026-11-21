@@ -12,8 +12,9 @@ only, never real orders.**
 
 **Status:** Phase 0 (foundations) is complete (tag `phase-0`): configuration, logging and
 alerts, Postgres and MongoDB with limited logins, migrations, validated collections, a daily
-health check, local Docker databases with tested backups, and a Colab template. Next: Phase 1,
-the data pipeline (after the Upstox account is open).
+health check, local Docker databases with tested backups, and a Colab template. Now: Phase 1,
+the data pipeline; the groundwork and the daily NSE instrument list with a watchlist are in
+place.
 
 ## Docs
 
@@ -57,6 +58,8 @@ Details, including how to copy secrets safely, are in the
 | `uv run alembic upgrade head` | Applies Postgres migrations with the owner login, only after CI is green |
 | `uv run python -m market_intel.mongo_setup` | Creates or updates MongoDB collections with the setup login |
 | `uv run python -m market_intel.backup` | Backs up the local Docker databases outside the repo (`--verify`: restore test); `full` profile only |
+| `uv run python -m market_intel.instruments refresh` | Refreshes NSE stocks (EQ, BE) and indices from Upstox's public file (`--dry-run` saves nothing) |
+| `uv run python -m market_intel.watchlist list` | Shows the watchlist (`add SYMBOL`, `remove SYMBOL`; max 50, stored only in the database) |
 
 The daily routine and what to do when a check fails are in the
 [runbook](docs/runbook.md#daily-routine).
