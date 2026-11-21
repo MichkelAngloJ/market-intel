@@ -1,17 +1,25 @@
 # Progress
 
-Last updated: 2026-11-22, HEAD c31dfe5. Updated at the end of every task (see
+Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
 
-- Phase 1 (stock data pipeline). Now: 1.2 (news and exchange feeds) in progress. 0.11 (remove the testing-laptop dependency) stays planned
+- Phase 1 (stock data pipeline). Now: 1.2 (news and exchange feeds) done, awaiting planner
+  review. Next: 1.2b (per-company news). 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
-- Phase 1 plan (owner-confirmed 2026-11-21; one session per task): 1.0 groundwork; 1.1
-  instruments and watchlist; 1.2 news RSS; 1.3 Upstox login and token; 1.4 daily candles with
-  gaps and backfill; 1.5 intraday candles; 1.6 macro; 1.7 live websocket feed; 1.8 scheduler;
-  1.9 read-only MCP access; 1.10 Phase 1 wrap-up. Tasks 1.0 to 1.2 run while the owner's
-  Upstox account is being approved.
+- Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
+  groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
+  News RSS for the watchlist, polite rate); 1.3 Upstox login and token; 1.4 daily candles
+  with gaps and backfill; 1.5 intraday candles; 1.6 macro; 1.6b official NSE daily files
+  (bulk/block deals, bhavcopy delivery %, ASM/GSM lists; once a day, honest identity, stop
+  and alert if blocked); 1.7 live feed (also records order-book depth snapshots for the
+  watchlist); 1.8 scheduler; 1.9 read-only MCP access; 1.10 Phase 1 wrap-up. Tasks 1.0 to
+  1.2b run while the owner's Upstox account is being approved.
+- Phase 2 adds (owner, 2026-11-22): a local LLM via Ollama (first choice); filing PDFs with
+  OCR; page capture features 1 and 2; the expert-feature catalogue
+  ([factor map](factors.md)). The planned 1.4 item "partial run status" was done in 1.2
+  (owner-approved).
 - Owner decisions for Phase 1 (2026-11-21):
   - The daily Upstox token comes from a manual browser login (one command); the token is kept
     only on this laptop; passwords and TOTP secrets are never stored.
@@ -104,12 +112,14 @@ Last updated: 2026-11-22, HEAD c31dfe5. Updated at the end of every task (see
 | 0.11 | planned (not before 2026-12-03) | – | Remove testing-laptop dependency (hand-back checklist, cloud databases per the 0.10 decision, two-laptop docs) |
 | 1.0 | done 2026-11-21 (HEAD 3938cd5) | passed (planner, 2026-11-22) | Groundwork: one log file per component; background alerts with a bounded exit flush and a locked throttle; `market_intel.sources` interface, typed records and a fake source; multi-window rate limiter with Upstox defaults and 429 back-off; `ingestion_run` helper |
 | 1.1 | done 2026-11-22 (HEAD c31dfe5) | passed (planner, 2026-11-22) | Instruments from Upstox's public NSE file (EQ, BE, indices) with conditional GET, size caps, safety valve and symbol history; sector import from the Nifty 500 list CSV; watchlist (max 50, database only); migration 0004; strict URL masking in logs; cloud MongoDB access decision logged |
-| 1.2 | in progress | – | News and exchange feeds (RSS), source health, factor map |
+| 1.2 | done 2026-11-22 (HEAD 8317a95) | awaiting planner review | 11 RSS feeds (6 news, 5 NSE/BSE) into `news_items` with `available_at`, dedupe and clear-match symbols; reusable source-health alerts and the `sources` health check; `partial` run status; factor map; spec, plan and five decisions |
+| 1.2b | next | – | Per-company news (Google News RSS for the watchlist) |
 | 1.3 | planned | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
 | 1.6 | planned | – | Macro |
-| 1.7 | planned | – | Live websocket feed |
+| 1.6b | planned | – | Official NSE daily files (bulk/block deals, bhavcopy delivery %, ASM/GSM lists) |
+| 1.7 | planned | – | Live websocket feed (plus order-book depth snapshots for the watchlist) |
 | 1.8 | planned | – | Scheduler |
 | 1.9 | planned | – | Read-only MCP access |
 | 1.10 | planned | – | Phase 1 wrap-up |
@@ -124,6 +134,12 @@ Last updated: 2026-11-22, HEAD c31dfe5. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- News (1.2): local `news_items` holds 227 items (207 news, 20 exchange; 17 exchange items
+  matched a stock, 3 unmatched; every `published_at` from the feed). First real fetch
+  2026-11-22: run `success`, `rows_written` 227; the immediate second run skipped all 11
+  feeds by interval. MongoDB validator and indexes updated with `mongo_setup` (second run:
+  nothing to change). Health overall OK (11 OK, 3 SKIP; `sources` OK). Backup and
+  `backup --verify` OK with `news_items` 227.
 - Instruments (1.1): first real refresh 2026-11-22 kept 3102 (EQ 2779, BE 184, indices 139),
   0 malformed; a second run was "not modified"; a run from the saved file made 0 changes.
   No sectors yet (the owner's sector import is pending). Watchlist empty (the demo removed
@@ -135,10 +151,9 @@ Last updated: 2026-11-22, HEAD c31dfe5. Updated at the end of every task (see
   databases and leave no rows (the instrument tests run in a transaction that is rolled back).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
-- CI (run 44937985801) and compose-smoke (run 44937985831) green at e7a0438, the last 1.1
-  code commit: 0004 up, down and up, `alembic check` with no drift, 33 integration tests, the
-  fake-file refresh twice (second run 0 changes). The docs commits' CI result is in the 1.1
-  report.
+- CI (run 44945548776) and compose-smoke (run 44945548733) green at 131a510, the last 1.2
+  code commit (37 integration tests); CI green at 8317a95 (run 44945788144). The final
+  commit's CI result is in the 1.2 report.
 
 ## Carry-forward items
 
@@ -155,9 +170,12 @@ Last updated: 2026-11-22, HEAD c31dfe5. Updated at the end of every task (see
   collection.
 - The cloud MongoDB accepts any address (decision 2026-11-20): passwords stay only in `.env`
   and are changed at once if exposed; the cloud databases are deleted in 0.11.
-- Testing laptop: its cloud Postgres needs `uv run alembic upgrade head` (0004) the next
-  time it is used (after `git pull`, before running the instruments refresh there).
-- 1.4: add a `partial` run status to `ingestion_run` (planner, 1.0 review).
+- Testing laptop: the next time it is used, after `git pull`: `uv run alembic upgrade head`
+  (0004) and `uv run python -m market_intel.mongo_setup` (the 1.2 news_items validator and
+  indexes), before running the instruments refresh or the news fetch there.
+- 1.7: order-book depth recording starts there (no history exists before it).
+- The publishers' RSS terms (ET, Mint, Business Standard, NSE, BSE): the owner may check them
+  in a browser; ours is personal, local and never republished.
 - Owner: download the Nifty 500 list CSV by hand and run `instruments import-sectors`
   (dry run first); see the runbook (Instruments and watchlist).
 - Before the testing laptop is handed back: log out of GitHub CLI, revoke its token, delete
