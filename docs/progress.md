@@ -1,12 +1,13 @@
 # Progress
 
-Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
+Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
 
 - Phase 1 (stock data pipeline). Now: 1.2b (per-company news, BSE codes, exchange item
-  identity, 14-day silence warning) in progress. 0.11 (remove the testing-laptop dependency) stays planned
+  identity, 14-day silence warning) done, awaiting planner review. Next: 1.3 (Upstox login
+  and token). 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -121,8 +122,8 @@ Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
 | 1.0 | done 2026-11-21 (HEAD 3938cd5) | passed (planner, 2026-11-22) | Groundwork: one log file per component; background alerts with a bounded exit flush and a locked throttle; `market_intel.sources` interface, typed records and a fake source; multi-window rate limiter with Upstox defaults and 429 back-off; `ingestion_run` helper |
 | 1.1 | done 2026-11-22 (HEAD c31dfe5) | passed (planner, 2026-11-22) | Instruments from Upstox's public NSE file (EQ, BE, indices) with conditional GET, size caps, safety valve and symbol history; sector import from the Nifty 500 list CSV; watchlist (max 50, database only); migration 0004; strict URL masking in logs; cloud MongoDB access decision logged |
 | 1.2 | done 2026-11-22 (HEAD 8317a95) | passed (planner, 2026-11-22) | 11 RSS feeds (6 news, 5 NSE/BSE) into `news_items` with `available_at`, dedupe and clear-match symbols; reusable source-health alerts and the `sources` health check; `partial` run status; factor map; spec, plan and five decisions |
-| 1.2b | in progress | – | Per-company news (Google News RSS), BSE codes, exchange item identity, 14-day silence warning |
-| 1.3 | planned | – | Upstox login and token |
+| 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | awaiting planner review | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
+| 1.3 | next | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
 | 1.6 | planned | – | Macro |
@@ -142,6 +143,13 @@ Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- 1.2b (2026-11-22): local databases at migration 0005; `mongo_setup` applied (second run:
+  nothing to change). `migrate-exchange-keys`: 20 updated, 0 conflicts; a second run 20
+  unchanged. 2755 of 2963 active NSE stocks have a `bse_code`. First company-fetch: 11
+  targets (watchlist 0, filers 11), 11 requests, 84 new items (high 27, low 57), not
+  blocked; run `success`, `rows_written` 84. `news_items`: 207 news, 20 exchange, 84
+  company news. Health overall OK (11 OK, 3 SKIP; `sources` OK, 12 sources). Backup and
+  `backup --verify` OK (`news_items` 311).
 - News (1.2): local `news_items` holds 227 items (207 news, 20 exchange; 17 exchange items
   matched a stock, 3 unmatched; every `published_at` from the feed). First real fetch
   2026-11-22: run `success`, `rows_written` 227; the immediate second run skipped all 11
@@ -159,9 +167,9 @@ Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
   databases and leave no rows (the instrument tests run in a transaction that is rolled back).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
-- CI (run 44945548776) and compose-smoke (run 44945548733) green at 131a510, the last 1.2
-  code commit (37 integration tests); CI green at 8317a95 (run 44945788144). The final
-  commit's CI result is in the 1.2 report.
+- CI (run 44948320281) and compose-smoke (run 44948320314) green at fe3d7ea, the last 1.2b
+  code commit (0005 up, down and up; no drift; 41 integration tests); CI green at 7d7e9ac
+  (run 44948430921). The final commit's CI result is in the 1.2b report.
 
 ## Carry-forward items
 
@@ -179,8 +187,13 @@ Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
 - The cloud MongoDB accepts any address (decision 2026-11-20): passwords stay only in `.env`
   and are changed at once if exposed; the cloud databases are deleted in 0.11.
 - Testing laptop: the next time it is used, after `git pull`: `uv run alembic upgrade head`
-  (0004) and `uv run python -m market_intel.mongo_setup` (the 1.2 news_items validator and
-  indexes), before running the instruments refresh or the news fetch there.
+  (0005) and `uv run python -m market_intel.mongo_setup` (the 1.2 and 1.2b news_items
+  validator and indexes), then `news migrate-exchange-keys` if its database holds exchange
+  items, before running the instruments refresh or any news fetch there.
+- Watchlist empty: company-fetch covers only recent filers until the owner adds stocks.
+- Google News is best effort: a block pauses it until the next IST day; repeated blocks
+  over several days go to the planner. 57 of the first 84 company items were low
+  confidence; Phase 2 checks them.
 - 1.7: order-book depth recording starts there (no history exists before it).
 - The publishers' RSS terms (ET, Mint, Business Standard, NSE, BSE): the owner may check them
   in a browser; ours is personal, local and never republished.
