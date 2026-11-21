@@ -11,6 +11,9 @@ on:
       - "src/market_intel/db_check.py"
       - "src/market_intel/health.py"
       - "src/market_intel/ingestion.py"
+      - "src/market_intel/instruments.py"
+      - "src/market_intel/watchlist.py"
+      - "src/market_intel/sources/**"
       - "src/market_intel/mongo/**"
       - "src/market_intel/mongo_setup.py"
       - "src/market_intel/config.py"
@@ -28,6 +31,9 @@ on:
       - "src/market_intel/db_check.py"
       - "src/market_intel/health.py"
       - "src/market_intel/ingestion.py"
+      - "src/market_intel/instruments.py"
+      - "src/market_intel/watchlist.py"
+      - "src/market_intel/sources/**"
       - "src/market_intel/mongo/**"
       - "src/market_intel/mongo_setup.py"
       - "src/market_intel/config.py"
@@ -117,6 +123,26 @@ jobs:
         env:
           RUN_INTEGRATION: "1"
         run: uv run pytest -m integration -v
+
+      # The real refresh command on a small FAKE instrument file (fake ISINs, no download):
+      # the second run on the same file must make 0 changes.
+      - name: Instruments refresh from a fake file (twice)
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          uv run python -c "
+          import gzip, json, sys
+          eq = [{'segment': 'NSE_EQ', 'instrument_type': s, 'isin': f'ZZTEST{n:05d}1',
+                 'instrument_key': f'NSE_EQ|ZZTEST{n:05d}1', 'trading_symbol': f'ZZCI{n}',
+                 'name': 'FAKE', 'lot_size': 1, 'tick_size': 5.0}
+                for n, s in enumerate(['EQ', 'EQ', 'BE'])]
+          idx = [{'segment': 'NSE_INDEX', 'instrument_type': 'INDEX',
+                  'instrument_key': 'NSE_INDEX|ZZ CI 50', 'trading_symbol': 'ZZ CI 50'}]
+          open(sys.argv[1], 'wb').write(gzip.compress(json.dumps(eq + idx).encode()))
+          " "$RUNNER_TEMP/fake.json.gz"
+          uv run python -m market_intel.instruments refresh --file "$RUNNER_TEMP/fake.json.gz"
+          uv run python -m market_intel.instruments refresh --file "$RUNNER_TEMP/fake.json.gz" | tee refresh_2.txt
+          grep -q "instruments refresh: 0 changes" refresh_2.txt
 
       - name: Database check
         env:
