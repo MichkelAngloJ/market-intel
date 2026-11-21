@@ -1,15 +1,37 @@
 # Progress
 
-Last updated: 2026-11-21, HEAD 4eb9574. Updated at the end of every task (see
+Last updated: 2026-11-21, HEAD 3938cd5. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
 
-- Phase 0 (setup) is complete: 0.10 done, awaiting planner review; tag `phase-0`. Review:
+- Phase 1 (stock data pipeline). Now: 1.0 (groundwork) done, awaiting planner review. Next:
+  1.1 (instruments and watchlist). 0.11 (remove the testing-laptop dependency) stays planned
+  for not before 2026-12-03.
+- Phase 1 plan (owner-confirmed 2026-11-21; one session per task): 1.0 groundwork; 1.1
+  instruments and watchlist; 1.2 news RSS; 1.3 Upstox login and token; 1.4 daily candles with
+  gaps and backfill; 1.5 intraday candles; 1.6 macro; 1.7 live websocket feed; 1.8 scheduler;
+  1.9 read-only MCP access; 1.10 Phase 1 wrap-up. Tasks 1.0 to 1.2 run while the owner's
+  Upstox account is being approved.
+- Owner decisions for Phase 1 (2026-11-21):
+  - The daily Upstox token comes from a manual browser login (one command); the token is kept
+    only on this laptop; passwords and TOTP secrets are never stored.
+  - A Python scheduler in the repo, started by Windows at logon, catches up after downtime.
+  - The Upstox Basic plan is enough.
+  - The owner's Upstox mobile app is signed in, so the approve-on-phone token option can be
+    evaluated in or after 1.3.
+- Upstox facts checked by the planner (official docs, 2026-11-21): APIs free; standard limits
+  per API per user 50 per second, 500 per minute, 2000 per 30 minutes; normal websocket
+  limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
+  to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
+  request).
+- 0.10 review (planner, 2026-11-21): passed. Verified: tag `phase-0` on b661d98, local and
+  remote; CI green at b661d98; compose-smoke green at 7c7f966; health overall OK with
+  `backup_age` OK; the review is honest and specific; privacy clean; old decision entries
+  untouched; no-reply emails. Its open question is closed: no clickable CI link in the review
+  (it would expose the account name); the run IDs are enough.
+- Phase 0 (setup) is complete; tag `phase-0`. Review:
   [docs/reviews/phase-0.md](reviews/phase-0.md).
-- Next: Phase 1 planning by the planner, and the owner's Upstox account (owner-side, no code,
-  no keys). 0.11 (remove the testing-laptop dependency) stays planned for not before
-  2026-12-03.
 - 0.9b review (planner, 2026-11-21): passed. All commits pushed; CI green at 9e19a1e;
   compose-smoke green at 7a00494; the CLAUDE.md admin-login rule updated (owner-approved);
   health overall OK on the full profile against local Docker; backups outside the repo, with
@@ -68,8 +90,19 @@ Last updated: 2026-11-21, HEAD 4eb9574. Updated at the end of every task (see
 | main laptop setup | done 2026-11-20 | verified (health OK) | Tools, clone, `.env`, health check |
 | 0.9a | done 2026-11-20 (HEAD 1dfb7ce) | passed (planner, 2026-11-20) | Shared tracking files; phase titles; main laptop setup in the runbook |
 | 0.9b | done 2026-11-21 (HEAD 3961a2b) | passed (planner, 2026-11-21) | Local Docker databases on the main laptop (migrated, set up, backup with manifest and restore test); commit-email guard (hook + CI history test) |
-| 0.10 | done 2026-11-21 (HEAD 4eb9574) | awaiting planner review | Phase 0 wrap-up: `backup_age` health check and `BACKUP_MAX_AGE_DAYS`; Phase 0 review; spec (cloud databases, AI access through MCP); tag `phase-0` |
+| 0.10 | done 2026-11-21 (HEAD 4eb9574) | passed (planner, 2026-11-21) | Phase 0 wrap-up: `backup_age` health check and `BACKUP_MAX_AGE_DAYS`; Phase 0 review; spec (cloud databases, AI access through MCP); tag `phase-0` |
 | 0.11 | planned (not before 2026-12-03) | – | Remove testing-laptop dependency (hand-back checklist, cloud databases per the 0.10 decision, two-laptop docs) |
+| 1.0 | done 2026-11-21 (HEAD 3938cd5) | awaiting planner review | Groundwork: one log file per component; background alerts with a bounded exit flush and a locked throttle; `market_intel.sources` interface, typed records and a fake source; multi-window rate limiter with Upstox defaults and 429 back-off; `ingestion_run` helper |
+| 1.1 | next | – | Instruments and watchlist |
+| 1.2 | planned | – | News RSS |
+| 1.3 | planned | – | Upstox login and token |
+| 1.4 | planned | – | Daily candles with gap detection and backfill |
+| 1.5 | planned | – | Intraday candles |
+| 1.6 | planned | – | Macro |
+| 1.7 | planned | – | Live websocket feed |
+| 1.8 | planned | – | Scheduler |
+| 1.9 | planned | – | Read-only MCP access |
+| 1.10 | planned | – | Phase 1 wrap-up |
 
 ## State
 
@@ -80,6 +113,10 @@ Last updated: 2026-11-21, HEAD 4eb9574. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- Phase 1 groundwork (1.0) in place, no real data source yet: logs in `logs/<component>.jsonl`;
+  `queue_alert` sends in the background; `market_intel.sources`, `market_intel.rate_limit` and
+  `market_intel.ingestion` exist. The ingestion-run integration test passes through the app
+  login on the local databases and leaves no rows (`data_freshness` still SKIP).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
 - CI and compose-smoke green at 7c7f966 (all 0.10 code; compose-smoke shows `backup_age`
@@ -88,8 +125,8 @@ Last updated: 2026-11-21, HEAD 4eb9574. Updated at the end of every task (see
 
 ## Carry-forward items
 
-- Before Phase 1 runs several processes: one log file per component, and alerts sent in the
-  background (Windows log-rotation lock).
+- 1.3: the owner's Upstox mobile app is signed in; evaluate the approve-on-phone token option.
+- First Upstox backfill takes hours (2000 requests per 30 minutes); it must resume safely.
 - Phase 2: decide when the `llm` settings group counts as complete (lean: Gemini OR Groq).
 - Phase 3 start: Colab's newest runtime uses Python 3.13 while the project pins 3.12; decide
   whether to allow both.
