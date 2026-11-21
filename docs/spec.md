@@ -11,6 +11,8 @@ validates.
 - Modules, in order: 1 Stocks, 2 IPOs, 3 Mutual funds. The next module starts only after the
   current one passes validation.
 - Signals and paper trading only; never real orders.
+- Objective (owner, 2026-11-22): maximise profit after all costs with capped loss. Nothing
+  is guaranteed, and the system says so.
 
 ## Roles
 
@@ -43,7 +45,9 @@ validates.
 ## Cost
 
 - Zero cost by default.
-- LLMs: Gemini free tier first, Groq free tier second.
+- LLMs: a local LLM first (Ollama, small models on the 4 GB GPU), then the Gemini free tier,
+  then the Groq free tier (decision 2026-11-22). Accuracy is measured before any model is
+  trusted.
 - Paid fallback only with a hard cap of Rs 1,000/month enforced in code, spend logged, a
   warning at 80%. Rs 2,000 needs the owner's explicit approval, logged first.
 
@@ -57,15 +61,26 @@ validates.
 - Backup: yfinance (.NS), daily stock data only, when Upstox fails. Plus a macro-only
   exception for series Upstox lacks (USD-INR spot, crude).
 - Every row is tagged with its source; one data-source interface for all sources.
-- Macro: Nifty 50, sector indices, India VIX, USD-INR, crude, FII/DII flows (weekly manual
-  CSV import; no NSE scraping).
-- News: free RSS (ET Markets, Moneycontrol, Business Standard, Mint) plus NSE/BSE corporate
-  announcements. Headline and summary only, with source URL and publish time.
+- Macro: Nifty 50, sector indices, India VIX, USD-INR, crude, FII/DII flows (a manual CSV
+  import for now; 1.6 revisits it).
+- News: free RSS (ET Markets, Business Standard, Mint) plus the official NSE/BSE
+  announcement, results, board-meeting and insider-trading feeds (1.2). Headline and summary
+  only, with source URL, publish time, fetch time and `available_at`. Moneycontrol is
+  excluded: it blocks non-browser clients.
+- Per-company news: Google News RSS for the watchlist, at a polite rate (1.2b); never
+  search-page scraping.
+- Official NSE daily files (bulk/block deals, bhavcopy delivery %, ASM/GSM surveillance
+  lists): downloaded once a day with an honest identity, stopping with an alert if blocked
+  (1.6b).
 - Fundamentals: NSE/BSE filings, dated by filing date.
 - Later:
   - IPO: subscription by category, issue details, RHP PDFs
   - mutual funds: AMFI NAV, factsheet PDFs
-- Respect site terms; no aggressive scraping; never redistribute broker or exchange data.
+- **Legitimate channels only** (decision 2026-11-22): RSS feeds, official files, APIs and
+  pages the owner captures. The code uses an honest identity and never imitates a browser
+  or works around blocks, CAPTCHAs or logins. Respect site terms; no aggressive scraping;
+  never redistribute broker or exchange data. Every source is watched by source-health
+  alerts.
 - Universe: daily data for all actively traded NSE stocks; minute data for a watchlist (~50);
   on-demand status for any stock.
 
@@ -75,13 +90,17 @@ validates.
 - **1 Stock data pipeline:** Upstox daily + intraday candles, live feed, macro, news, gap
   detection and backfill, scheduler, data health checks (Learn: websockets, scheduling)
 - **2 Events and features:** technical + fundamental features; LLM news-to-JSON event
-  extraction; FinBERT sentiment (Learn: structured LLM extraction, FinBERT)
+  extraction (a local LLM via Ollama first); FinBERT sentiment; filing-PDF extraction with
+  OCR when needed; page capture (below); the expert-feature catalogue
+  ([factor map](factors.md)) (Learn: structured LLM extraction, FinBERT)
 - **3 Stock models:** long-term + intraday; XGBoost baseline vs PyTorch LSTM; SHAP; MLflow
   (Learn: PyTorch, SHAP, MLflow)
 - **4 Paper trading page** (Learn: backtesting metrics)
 - **5 Online learning and anomaly detection** (unusual price/volume, possible pumps, data
-  errors): Isolation Forest, then a PyTorch autoencoder (Learn: river, drift detection,
-  anomaly detection)
+  errors): Isolation Forest, then a PyTorch autoencoder; manipulation risk flags (pump and
+  dump, wash trading, operator-led rises, spoofing) learned from exchange surveillance lists
+  and SEBI enforcement orders, used only to avoid or down-weight stocks (Learn: river,
+  drift detection, anomaly detection)
 - **6 IPO:** listing-gain + 3/6-month performance model; RAG over RHP PDFs. Never predict
   allotment (it's a lottery).
 - **7 Mutual funds:** rank and screen from numeric metrics (rolling returns, Sharpe/Sortino,
@@ -109,6 +128,39 @@ validates.
   end of day; long-term 1 / 3 / 6 months.
 - No single model for all companies: per sector or volatility cluster, plus dedicated models
   only for large, liquid stocks with enough history. Warn when data is too thin.
+
+### Page capture (Phase 2)
+
+For crucial decisions (decision 2026-11-22):
+
+1. **Automatic capture:** a browser saves pages to PDF only where automated access is
+   allowed (robots and terms respected), and stops at any block.
+2. **Evidence requests:** the system lists exact URLs (checked automatically where allowed,
+   marked valid or invalid by the owner on screen); the owner saves the pages as PDF; the
+   system takes them from an upload/file picker or from the Downloads folder (only new PDFs
+   saved after an open request, and only after the owner confirms the match).
+
+The capture time counts as `available_at`. Captured pages stay on the laptop for personal
+use; they are never committed or shared.
+
+### Intraday design
+
+Decision 2026-11-22:
+
+- A fast numeric path: a small model (e.g. LightGBM) on 1-minute features (price, volume,
+  order-book imbalance, market and sector moves, VIX, time of day, the latest background
+  news score), with millisecond inference and no LLM in the live decision.
+- Labels use the triple-barrier method: target, stop-loss or time limit, whichever comes
+  first.
+- Every signal is a full trade plan: entry, target, stop-loss, exit time, quantity, maximum
+  loss, probability and expected gain after all costs. It is "no trade" unless the
+  expected gain after costs is positive.
+- Fixed risk per trade, a daily loss limit and a maximum number of trades.
+- 15 minutes is the main horizon; 5 minutes is an experiment.
+- Order-book depth is recorded from 1.7, because no history exists.
+- SEBI's study found that 71% of individual intraday traders in the cash segment lost
+  money in FY2023; everything is paper-traded first and promotion needs the owner's
+  approval.
 
 ## Modeling rules
 
