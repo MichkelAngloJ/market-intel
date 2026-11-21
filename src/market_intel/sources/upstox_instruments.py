@@ -23,6 +23,7 @@ import gzip
 import io
 import json
 import os
+import re
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -79,9 +80,14 @@ class Download:
         return self.path is None
 
 
-def _load_state(folder: Path, url: str) -> dict[str, str]:
+def state_file(prefix: str = "NSE") -> str:
+    """The validator file of one instrument file: ``state.json`` (NSE), ``state-bse.json``."""
+    return STATE_FILE if prefix == "NSE" else f"state-{prefix.lower()}.json"
+
+
+def _load_state(folder: Path, url: str, prefix: str = "NSE") -> dict[str, str]:
     try:
-        state = json.loads((folder / STATE_FILE).read_text(encoding="utf-8"))
+        state = json.loads((folder / state_file(prefix)).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(state, dict) or state.get("url") != url:
@@ -89,7 +95,7 @@ def _load_state(folder: Path, url: str) -> dict[str, str]:
     return {k: v for k, v in state.items() if isinstance(v, str)}
 
 
-def save_validators(data_dir: Path, url: str, result: Download) -> None:
+def save_validators(data_dir: Path, url: str, result: Download, prefix: str = "NSE") -> None:
     """Remember ETag / Last-Modified for the next conditional GET (after a committed refresh)."""
     folder = raw_dir(data_dir)
     folder.mkdir(parents=True, exist_ok=True)
@@ -98,13 +104,14 @@ def save_validators(data_dir: Path, url: str, result: Download) -> None:
         state["etag"] = result.etag
     if result.last_modified:
         state["last_modified"] = result.last_modified
-    tmp = folder / (STATE_FILE + ".tmp")
+    name = state_file(prefix)
+    tmp = folder / (name + ".tmp")
     tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    os.replace(tmp, folder / STATE_FILE)
+    os.replace(tmp, folder / name)
 
 
-def _rotate(folder: Path, keep: int = KEEP_FILES) -> None:
-    files = sorted(folder.glob(f"{FILE_PREFIX}*{FILE_SUFFIX}"), reverse=True)
+def _rotate(folder: Path, keep: int = KEEP_FILES, prefix: str = "NSE") -> None:
+    files = sorted(folder.glob(f"{prefix}-*{FILE_SUFFIX}"), reverse=True)
     for old in files[keep:]:
         old.unlink(missing_ok=True)
 
@@ -117,8 +124,10 @@ def download(
     conditional: bool = True,
     save: bool = True,
     client: httpx.Client | None = None,
+    prefix: str = "NSE",
 ) -> Download:
-    """Fetch the instrument file. See the module docstring.
+    """Fetch an instrument file (``prefix`` NSE or BSE names the file and its validators).
+    See the module docstring.
 
     ``conditional=False`` always downloads in full (dry runs). ``save=False`` keeps the file in a
     temporary name next to the others and leaves the dated files alone (the caller deletes it).
@@ -127,7 +136,7 @@ def download(
     folder.mkdir(parents=True, exist_ok=True)
     headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
     if conditional:
-        state = _load_state(folder, url)
+        state = _load_state(folder, url, prefix)
         if "etag" in state:
             headers["If-None-Match"] = state["etag"]
         if "last_modified" in state:
@@ -135,7 +144,8 @@ def download(
 
     own_client = client is None
     client = client or httpx.Client(timeout=TIMEOUT_S, follow_redirects=True, max_redirects=3)
-    target = folder / (f"{FILE_PREFIX}{today:%Y%m%d}{FILE_SUFFIX}" if save else "dry-run.tmp")
+    temp_name = "dry-run.tmp" if prefix == "NSE" else f"dry-run-{prefix.lower()}.tmp"
+    target = folder / (f"{prefix}-{today:%Y%m%d}{FILE_SUFFIX}" if save else temp_name)
     part = target.with_name(target.name + ".part")
     try:
         with client.stream("GET", url, headers=headers, timeout=TIMEOUT_S) as response:
@@ -167,7 +177,7 @@ def download(
         if own_client:
             client.close()
     if save:
-        _rotate(folder)
+        _rotate(folder, prefix=prefix)
     return Download(path=target, etag=etag, last_modified=last_modified)
 
 
@@ -318,3 +328,56 @@ def parse_file(path: Path, *, reader: Callable[[Path], Any] = read_json_gz) -> P
     if not isinstance(data, list):
         raise InstrumentFileError("instrument file is not a JSON array")
     return parse_objects(data)
+
+
+# --- BSE scrip codes ---------------------------------------------------------------------
+
+BSE_EQUITY_SEGMENT = "BSE_EQ"
+_ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
+# Upstox's BSE file: ``exchange_token`` holds the BSE scrip code (a 6-digit string; checked
+# 2026-11-22 against the scrip codes in BSE's own announcement feed).
+_SCRIP_CODE = re.compile(r"^[0-9]{6}$")
+
+
+@dataclass
+class BseCodes:
+    """ISIN -> BSE scrip code from the BSE_EQ objects, plus what was skipped."""
+
+    by_isin: dict[str, str] = field(default_factory=dict)
+    other_segments: int = 0
+    malformed: int = 0
+
+
+def parse_bse_codes(path: Path, *, reader: Callable[[Path], Any] = read_json_gz) -> BseCodes:
+    """Read Upstox's BSE file (same untrusted-data rules as the NSE file) into ISIN -> code.
+
+    An ISIN or a code that appears twice is dropped entirely (ambiguous)."""
+    data = reader(path)
+    if not isinstance(data, list):
+        raise InstrumentFileError("instrument file is not a JSON array")
+    result = BseCodes()
+    seen_codes: Counter[str] = Counter()
+    seen_isins: Counter[str] = Counter()
+    pairs: list[tuple[str, str]] = []
+    for obj in data:
+        if not isinstance(obj, dict):
+            result.malformed += 1
+            continue
+        if obj.get("segment") != BSE_EQUITY_SEGMENT:
+            result.other_segments += 1
+            continue
+        isin, code = obj.get("isin"), obj.get("exchange_token")
+        isin = isin.strip() if isinstance(isin, str) else ""
+        code = str(code).strip() if isinstance(code, (str, int)) else ""
+        if not (_ISIN.fullmatch(isin) and _SCRIP_CODE.fullmatch(code)):
+            result.malformed += 1
+            continue
+        seen_isins[isin] += 1
+        seen_codes[code] += 1
+        pairs.append((isin, code))
+    for isin, code in pairs:
+        if seen_isins[isin] == 1 and seen_codes[code] == 1:
+            result.by_isin[isin] = code
+        else:
+            result.malformed += 1
+    return result

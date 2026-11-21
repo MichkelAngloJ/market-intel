@@ -45,7 +45,13 @@ from market_intel.alerts import queue_alert
 from market_intel.config import ConfigError, Settings, get_settings
 from market_intel.db import postgres
 from market_intel.ingestion import ingestion_run
-from market_intel.logging_setup import bound_context, configure_logging, get_logger, new_run_id
+from market_intel.logging_setup import (
+    bound_context,
+    configure_logging,
+    get_logger,
+    mask_text,
+    new_run_id,
+)
 from market_intel.sources.records import Instrument
 from market_intel.sources.upstox_instruments import (
     SOURCE,
@@ -53,6 +59,7 @@ from market_intel.sources.upstox_instruments import (
     InstrumentFileError,
     ParseResult,
     download,
+    parse_bse_codes,
     parse_file,
     save_validators,
 )
@@ -256,6 +263,11 @@ class RefreshSummary:
     not_modified: bool = False
     plan: Plan | None = None
     parsed: ParseResult | None = None
+    bse: BseResult | None = None
+
+    def all_lines(self) -> list[str]:
+        """The NSE summary plus the BSE-code line (when the BSE step ran or was skipped)."""
+        return self.lines() + (self.bse.lines() if self.bse else [])
 
     def lines(self) -> list[str]:
         prefix = "DRY RUN (nothing saved): " if self.dry_run else ""
@@ -285,8 +297,13 @@ def run_refresh(
     today: date | None = None,
     client: httpx.Client | None = None,
     connect: Connect | None = None,
+    bse: bool = False,
+    bse_file: Path | None = None,
 ) -> RefreshSummary:
-    """The ``refresh`` command. Raises RefreshRefused / InstrumentFileError on refusal."""
+    """The ``refresh`` command. Raises RefreshRefused / InstrumentFileError on refusal.
+
+    ``bse=True`` also maps BSE scrip codes from Upstox's BSE file (or ``bse_file``) after the
+    NSE part; if only that step fails, the run is partial. The command turns it on."""
     today = today or ist_today()
     conn_factory = connect or postgres.connect
     url = settings.upstox_instruments_url
@@ -306,9 +323,16 @@ def run_refresh(
         finally:
             if not file:
                 got.path.unlink(missing_ok=True)
+        if bse:
+            summary.bse, _ = refresh_bse(
+                settings, conn_factory, today, client=client, bse_file=bse_file, dry_run=True
+            )
         return summary
 
-    params = {"file": file.name if file else None, "download": file is None}
+    params: dict[str, Any] = {"file": file.name if file else None, "download": file is None}
+    if bse:
+        params["bse"] = True
+    bse_got: Download | None = None
     try:
         with ingestion_run(settings, JOB, source=SOURCE, params=params, connect=connect) as run:
             got = (
@@ -319,18 +343,26 @@ def run_refresh(
             if got.not_modified:
                 summary.not_modified = True
                 log.info("instruments_not_modified")
-                return summary
-            assert got.path is not None
-            summary.parsed = parse_file(got.path)
-            db = settings.require("database")
-            with conn_factory(db) as conn:
-                summary.plan = refresh_in_transaction(
-                    conn,
-                    summary.parsed.instruments,
-                    today=today,
-                    min_keep_ratio=settings.instruments_min_keep_ratio,
+            else:
+                assert got.path is not None
+                summary.parsed = parse_file(got.path)
+                db = settings.require("database")
+                with conn_factory(db) as conn:
+                    summary.plan = refresh_in_transaction(
+                        conn,
+                        summary.parsed.instruments,
+                        today=today,
+                        min_keep_ratio=settings.instruments_min_keep_ratio,
+                    )
+                run.add_rows(summary.plan.changes)
+            if bse:
+                summary.bse, bse_got = refresh_bse(
+                    settings, conn_factory, today, client=client, bse_file=bse_file
                 )
-            run.add_rows(summary.plan.changes)
+                if summary.bse.plan:
+                    run.add_rows(summary.bse.plan.changes)
+                if summary.bse.error:
+                    run.mark_partial(f"BSE codes failed: {summary.bse.error}")
     except RefreshRefused as exc:
         log.warning("instruments_refresh_refused", kept=exc.kept, active=exc.active)
         queue_alert(
@@ -341,15 +373,18 @@ def run_refresh(
             context={"kept": exc.kept, "active": exc.active, "min_keep_ratio": exc.ratio},
         )
         raise
-    if not file:
+    if not file and not got.not_modified:
         save_validators(settings.data_dir, url, got)  # only after the refresh committed
-    log.info(
-        "instruments_refreshed",
-        changes=summary.plan.changes,
-        inserted=len(summary.plan.inserts),
-        deactivated=len(summary.plan.deactivate),
-        malformed=summary.parsed.malformed,
-    )
+    if bse and not bse_file and bse_got is not None and not bse_got.not_modified:
+        save_validators(settings.data_dir, settings.upstox_bse_instruments_url, bse_got, "BSE")
+    if summary.plan is not None and summary.parsed is not None:
+        log.info(
+            "instruments_refreshed",
+            changes=summary.plan.changes,
+            inserted=len(summary.plan.inserts),
+            deactivated=len(summary.plan.deactivate),
+            malformed=summary.parsed.malformed,
+        )
     return summary
 
 
@@ -373,6 +408,157 @@ def _dry_run(
             pass
     assert plan is not None
     return parsed, plan
+
+
+# --- BSE scrip codes (from Upstox's public BSE file, by ISIN) ----------------------------
+
+BSE_ROWS_SQL = (
+    "SELECT id, isin, bse_code FROM instruments"
+    " WHERE exchange = 'NSE' AND segment = 'EQ' AND isin IS NOT NULL ORDER BY id FOR UPDATE"
+)
+BSE_COUNT_SQL = "SELECT count(*) FROM instruments WHERE bse_code IS NOT NULL"
+
+
+class BseRefused(Exception):
+    """The BSE file maps far fewer stocks than already have a code. Nothing was changed."""
+
+
+@dataclass
+class BsePlan:
+    set_codes: list[tuple[str, int]] = field(default_factory=list)  # code, instrument id
+    clear: list[int] = field(default_factory=list)
+    mapped: int = 0  # NSE stocks with a code after the plan
+
+    @property
+    def changes(self) -> int:
+        return len(self.set_codes) + len([i for i in self.clear if i not in self._set_ids])
+
+    @property
+    def _set_ids(self) -> set[int]:
+        return {row_id for _, row_id in self.set_codes}
+
+
+def plan_bse_codes(
+    rows: Iterable[tuple[int, str | None, str | None]],
+    by_isin: dict[str, str],
+    *,
+    min_keep_ratio: float,
+) -> BsePlan:
+    """Give each NSE stock (id, isin, current code) the code of its ISIN, or none. Refuses
+    (BseRefused) if fewer than ``min_keep_ratio`` x the currently coded stocks keep a code."""
+    plan = BsePlan()
+    current = 0
+    for row_id, isin, code in rows:
+        current += code is not None
+        wanted = by_isin.get(isin or "")
+        plan.mapped += wanted is not None
+        if wanted == code:
+            continue
+        if code is not None:
+            plan.clear.append(row_id)  # first, so a code can move between stocks
+        if wanted is not None:
+            plan.set_codes.append((wanted, row_id))
+    if current > 0 and plan.mapped < min_keep_ratio * current:
+        raise BseRefused(
+            f"the BSE file maps {plan.mapped} stocks, fewer than {min_keep_ratio:g} x the "
+            f"{current} that have a code; nothing was changed"
+        )
+    return plan
+
+
+def apply_bse_plan(conn: psycopg.Connection, plan: BsePlan) -> None:
+    if plan.clear:
+        conn.execute("UPDATE instruments SET bse_code = NULL WHERE id = ANY(%s)", (plan.clear,))
+    if plan.set_codes:
+        with conn.cursor() as cur:
+            cur.executemany("UPDATE instruments SET bse_code = %s WHERE id = %s", plan.set_codes)
+
+
+@dataclass
+class BseResult:
+    not_modified: bool = False
+    codes_in_file: int = 0
+    malformed: int = 0
+    plan: BsePlan | None = None
+    mapped_total: int | None = None  # instruments with a bse_code after the step
+    error: str | None = None
+    skipped: str | None = None
+
+    def lines(self) -> list[str]:
+        if self.skipped:
+            return [f"  BSE codes: skipped ({self.skipped})"]
+        if self.error:
+            return [f"  BSE codes: FAILED ({self.error}); the NSE refresh above still counts"]
+        total = "-" if self.mapped_total is None else self.mapped_total
+        if self.not_modified:
+            return [f"  BSE codes: file not modified; {total} instruments have a bse_code"]
+        assert self.plan is not None
+        return [
+            f"  BSE codes: {total} instruments have a bse_code (set {len(self.plan.set_codes)},"
+            f" cleared {len(self.plan.clear)}); codes in file {self.codes_in_file},"
+            f" malformed {self.malformed}"
+        ]
+
+
+def refresh_bse(
+    settings: Settings,
+    conn_factory: Connect,
+    today: date,
+    *,
+    client: httpx.Client | None = None,
+    bse_file: Path | None = None,
+    dry_run: bool = False,
+) -> tuple[BseResult, Download | None]:
+    """Download (or read) the BSE file and map its codes onto NSE stocks by ISIN, in its own
+    transaction. File problems and the BSE safety valve end in ``error`` (the caller marks
+    the run partial); database errors propagate."""
+    url = settings.upstox_bse_instruments_url
+    result = BseResult()
+    got: Download | None = None
+    try:
+        if bse_file:
+            got = Download(path=bse_file)
+        else:
+            got = download(
+                url,
+                settings.data_dir,
+                today,
+                conditional=not dry_run,
+                save=not dry_run,
+                client=client,
+                prefix="BSE",
+            )
+        db = settings.require("database")
+        if got.not_modified:
+            result.not_modified = True
+            with conn_factory(db) as conn:
+                result.mapped_total = conn.execute(BSE_COUNT_SQL).fetchone()[0]
+            return result, got
+        assert got.path is not None
+        codes = parse_bse_codes(got.path)
+        result.codes_in_file, result.malformed = len(codes.by_isin), codes.malformed
+        with conn_factory(db) as conn:
+            try:
+                with conn.transaction():
+                    rows = conn.execute(BSE_ROWS_SQL).fetchall()
+                    result.plan = plan_bse_codes(
+                        rows, codes.by_isin, min_keep_ratio=settings.instruments_min_keep_ratio
+                    )
+                    apply_bse_plan(conn, result.plan)
+                    result.mapped_total = conn.execute(BSE_COUNT_SQL).fetchone()[0]
+                    if dry_run:
+                        raise psycopg.Rollback()
+            except psycopg.Rollback:
+                pass
+    except (InstrumentFileError, BseRefused, httpx.HTTPError) as exc:
+        result.error = mask_text(f"{type(exc).__name__}: {exc}")[:300]
+        log.warning("bse_codes_failed", error=result.error)
+        return result, None
+    finally:
+        if dry_run and got is not None and got.path is not None and not bse_file:
+            got.path.unlink(missing_ok=True)
+    log.info("bse_codes_refreshed", mapped=result.mapped_total, dry_run=dry_run)
+    return result, got
 
 
 # --- sector import -----------------------------------------------------------------------
@@ -511,6 +697,12 @@ def build_parser() -> argparse.ArgumentParser:
     refresh = sub.add_parser("refresh", help="refresh NSE instruments from Upstox's file")
     refresh.add_argument("--file", type=Path, help="use this local .json.gz instead of downloading")
     refresh.add_argument("--dry-run", action="store_true", help="show the changes, save nothing")
+    refresh.add_argument(
+        "--bse-file",
+        type=Path,
+        help="use this local BSE .json.gz for the BSE codes (with --file, BSE codes are skipped"
+        " unless this is given)",
+    )
     sectors = sub.add_parser("import-sectors", help="set sectors from the Nifty 500 list CSV")
     sectors.add_argument("path", type=Path, help="the CSV downloaded from the NSE Indices website")
     sectors.add_argument("--dry-run", action="store_true", help="show the changes, save nothing")
@@ -532,10 +724,18 @@ def main(argv: list[str] | None = None, *, connect: Connect | None = None) -> in
                 if args.file and not args.file.is_file():
                     print(f"No such file: {args.file}", file=sys.stderr)
                     return 2
+                use_bse = args.file is None or args.bse_file is not None
                 summary = run_refresh(
-                    settings, file=args.file, dry_run=args.dry_run, connect=connect
+                    settings,
+                    file=args.file,
+                    dry_run=args.dry_run,
+                    connect=connect,
+                    bse=use_bse,
+                    bse_file=args.bse_file,
                 )
-                print("\n".join(summary.lines()))
+                if not use_bse:
+                    summary.bse = BseResult(skipped="--file without --bse-file")
+                print("\n".join(summary.all_lines()))
             else:
                 if not args.path.is_file():
                     print(f"No such file: {args.path}", file=sys.stderr)

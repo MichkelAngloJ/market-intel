@@ -203,10 +203,19 @@ class Settings(BaseSettings):
         "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
     )
     instruments_min_keep_ratio: float = Field(default=0.8, gt=0, le=1)
+    # Upstox's public BSE instrument file: BSE scrip codes for NSE stocks, matched by ISIN
+    upstox_bse_instruments_url: str = (
+        "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz"
+    )
     # news: the committed feed list (relative paths resolve from the repo root) and the size
     # cap of one feed response
     news_feeds_file: Path = Path("config/news_feeds.toml")
     news_fetch_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
+    # per-company news from Google News RSS search feeds (market_intel.sources.google_news)
+    google_news_rss_url: str = "https://news.google.com/rss/search"
+    google_news_min_seconds: float = Field(default=10, ge=1)  # one request per this, process-wide
+    google_news_company_interval_minutes: int = Field(default=60, ge=1)
+    google_news_filers_cap: int = Field(default=30, ge=0)
     # llm
     gemini_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
@@ -223,11 +232,11 @@ class Settings(BaseSettings):
     alert_throttle_hours: float = Field(default=6, ge=0)
     alert_dry_run: bool = False
 
-    @field_validator("upstox_instruments_url")
+    @field_validator("upstox_instruments_url", "upstox_bse_instruments_url", "google_news_rss_url")
     @classmethod
     def _https_only(cls, value: str) -> str:
         if not value.startswith("https://"):
-            raise ValueError("UPSTOX_INSTRUMENTS_URL must start with https://")
+            raise ValueError("this URL setting must start with https://")
         return value
 
     @field_validator("display_timezone")
