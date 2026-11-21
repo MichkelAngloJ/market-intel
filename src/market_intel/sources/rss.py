@@ -33,7 +33,7 @@ import feedparser
 import httpx
 
 from market_intel import __version__
-from market_intel.mongo.models import ExchangeMeta
+from market_intel.mongo.models import ExchangeMeta, exchange_identity, item_key
 from market_intel.sources.records import NewsRecord, check_tag
 
 USER_AGENT = f"market-intel/{__version__} (personal research; RSS reader)"
@@ -295,6 +295,19 @@ class ParsedFeed:
         return len(self.records) + self.malformed
 
 
+def item_key_for(
+    feed: Feed, entry: Any, link: str, title: str, published_at: datetime, source: str
+) -> str:
+    """The item key (``url_hash``). Exchange items: link + the feed's guid, or + the title and
+    time when there is no guid; repeated links are then separate events. News: the link."""
+    if feed.kind != "exchange":
+        return item_key(link)
+    guid = dict.get(entry, "id")
+    if isinstance(guid, str) and guid.strip():
+        return item_key(link, guid.strip())
+    return item_key(link, exchange_identity(title, published_at, source))
+
+
 def parse(feed: Feed, content: bytes, fetched_at: datetime) -> ParsedFeed:
     """Parse one fetched feed body into records (see the module docstring)."""
     parsed = feedparser.parse(
@@ -309,15 +322,17 @@ def parse(feed: Feed, content: bytes, fetched_at: datetime) -> ParsedFeed:
         if not title or not link.startswith(("https://", "http://")):
             result.malformed += 1
             continue
-        if link in seen:
-            continue  # the same link twice in one feed: keep the first
-        seen.add(link)
         summary = strip_html(entry.get("summary") or entry.get("description"), SUMMARY_MAX)
         published_at, source = timing(_feed_time(entry), fetched_at)
+        key = item_key_for(feed, entry, link, title, published_at, source)
+        if key in seen:
+            continue  # the same item twice in one feed: keep the first
+        seen.add(key)
         if source == "fetched":
             result.without_time += 1
         result.records.append(
             NewsRecord(
+                url_hash=key,
                 source=feed.source,
                 feed_url=feed.url,
                 url=link,

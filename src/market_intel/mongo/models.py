@@ -8,6 +8,7 @@ keeps the two in step.
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
@@ -101,11 +102,34 @@ def normalise_url(url: str) -> str:
 
 
 def url_hash(url: str) -> str:
-    """sha256 (hex) of the normalised URL: the unique key of a news item."""
+    """sha256 (hex) of the normalised URL: the item key of a news or company_news item."""
     return hashlib.sha256(normalise_url(url).encode("utf-8")).hexdigest()
 
 
-NewsKind = Literal["news", "exchange"]
+def exchange_identity(title: str, published_at: datetime, published_at_source: str = "feed") -> str:
+    """The identity of an exchange item whose feed gives no guid: the normalised title, plus
+    "|" and the publish time (UTC ISO) when that time came from the feed itself (a fetch time
+    would change on every fetch and turn one filing into many)."""
+    text = " ".join(title.split()).casefold()
+    if published_at_source != "feed":
+        return text
+    return f"{text}|{published_at.astimezone(UTC).isoformat()}"
+
+
+def item_key(url: str, identity: str | None = None) -> str:
+    """The item key stored as ``url_hash``. News and company news: sha256 of the normalised
+    URL. Exchange items: sha256 of the normalised URL + "#" + the item's identity (the feed's
+    guid, or :func:`exchange_identity`), so filings that share one PDF stay separate events."""
+    if identity is None:
+        return url_hash(url)
+    return hashlib.sha256(f"{normalise_url(url)}#{identity}".encode()).hexdigest()
+
+
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+NewsKind = Literal["news", "exchange", "company_news"]
+# company_news only: high unless the company name is one word or isn't in the title/summary
+MatchConfidence = Literal["high", "low"]
 # Where published_at came from: the feed's own date, the fetch time (the feed gave none), or
 # the fetch time because the feed's date was more than 5 minutes in the future.
 PublishedAtSource = Literal["feed", "fetched", "clamped"]
@@ -137,6 +161,7 @@ class NewsItem(Document):
     kind: NewsKind = "news"
     publisher: str | None = None
     feed_name: str | None = None
+    match_confidence: MatchConfidence | None = None
     exchange_meta: ExchangeMeta | None = None
     language: str = "en"
     symbols: list[str] = Field(default_factory=list)
@@ -144,13 +169,29 @@ class NewsItem(Document):
     @model_validator(mode="before")
     @classmethod
     def _fill_url_hash(cls, data: Any) -> Any:
-        if isinstance(data, dict) and isinstance(data.get("url"), str):
-            computed = url_hash(data["url"])
-            given = data.get("url_hash")
-            if given not in (None, computed):
-                raise ValueError("url_hash does not match the normalised url")
-            data = {**data, "url_hash": computed}
-        return data
+        # url_hash is the ITEM KEY (see item_key). Exchange items with a feed guid arrive with
+        # their key computed; without one it is computed here from the title and time.
+        if not (isinstance(data, dict) and isinstance(data.get("url"), str)):
+            return data
+        given = data.get("url_hash")
+        if data.get("kind") == "exchange":
+            if given is not None:
+                if not (isinstance(given, str) and _HEX64.fullmatch(given)):
+                    raise ValueError("url_hash must be 64 lower-case hex characters")
+                return data
+            title, published = data.get("title"), data.get("published_at")
+            if not isinstance(title, str) or published is None:
+                return data  # the field validators report what is missing
+            try:
+                when = _UTC.validate_python(published)
+            except ValidationError:
+                return data
+            identity = exchange_identity(title, when, data.get("published_at_source") or "feed")
+            return {**data, "url_hash": item_key(data["url"], identity)}
+        computed = url_hash(data["url"])
+        if given not in (None, computed):
+            raise ValueError("url_hash does not match the normalised url")
+        return {**data, "url_hash": computed}
 
     @model_validator(mode="before")
     @classmethod

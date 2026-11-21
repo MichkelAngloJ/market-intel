@@ -31,6 +31,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validat
 from market_intel.db.schema import CANDLE_SOURCES, PRICE_BASES
 from market_intel.mongo.models import (
     ExchangeMeta,
+    MatchConfidence,
     NewsItem,
     NewsKind,
     PublishedAtSource,
@@ -96,6 +97,7 @@ class Instrument(Record):
     # Set by the instrument refresh (IST dates), never by a source: left None in records.
     first_seen_on: date | None = None
     last_seen_on: date | None = None
+    bse_code: str | None = None  # set by the refresh from Upstox's BSE file, by ISIN
 
 
 class _Candle(Record):
@@ -140,6 +142,10 @@ class NewsRecord(Record):
     publisher: str | None = None
     feed_name: str | None = None
     exchange_meta: ExchangeMeta | None = None
+    match_confidence: MatchConfidence | None = None
+    # The item key, when the source computes it (exchange items with a feed guid); otherwise
+    # the model computes it (see market_intel.mongo.models.item_key).
+    url_hash: str | None = None
     language: str = "en"
     symbols: list[str] = Field(default_factory=list)
 
