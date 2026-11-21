@@ -1,0 +1,79 @@
+# RSS feeds read by `python -m market_intel.news fetch` (task 1.2; decisions 2026-11-22).
+#
+# Legitimate channels only: public RSS, fetched with an honest user agent, at most once per
+# min_interval_minutes per feed, with conditional requests and a size cap. Item links (article
+# pages, PDFs) are never followed. Moneycontrol is excluded: it blocks non-browser clients.
+#
+# Fields: name (lower-case, unique; the item source tag is "rss:<name>"), url (https), kind
+# ("news" or "exchange"), publisher, min_interval_minutes (default 10), enabled (default true).
+# Disable a feed that breaks (enabled = false) until its parser is fixed.
+
+# --- news ---
+
+[[feed]]
+name = "et_markets"
+url = "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"
+kind = "news"
+publisher = "Economic Times"
+
+[[feed]]
+name = "et_stocks"
+url = "https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms"
+kind = "news"
+publisher = "Economic Times"
+
+[[feed]]
+name = "mint_markets"
+url = "https://www.livemint.com/rss/markets"
+kind = "news"
+publisher = "Mint"
+
+[[feed]]
+name = "mint_companies"
+url = "https://www.livemint.com/rss/companies"
+kind = "news"
+publisher = "Mint"
+
+[[feed]]
+name = "bs_markets"
+url = "https://www.business-standard.com/rss/markets-106.rss"
+kind = "news"
+publisher = "Business Standard"
+
+[[feed]]
+name = "bs_companies"
+url = "https://www.business-standard.com/rss/companies-101.rss"
+kind = "news"
+publisher = "Business Standard"
+
+# --- exchange (official RSS) ---
+
+[[feed]]
+name = "nse_announcements"
+url = "https://nsearchives.nseindia.com/content/RSS/Online_announcements.xml"
+kind = "exchange"
+publisher = "NSE"
+
+[[feed]]
+name = "nse_financial_results"
+url = "https://nsearchives.nseindia.com/content/RSS/Financial_Results.xml"
+kind = "exchange"
+publisher = "NSE"
+
+[[feed]]
+name = "nse_board_meetings"
+url = "https://nsearchives.nseindia.com/content/RSS/Board_Meetings.xml"
+kind = "exchange"
+publisher = "NSE"
+
+[[feed]]
+name = "nse_insider_trading"
+url = "https://nsearchives.nseindia.com/content/RSS/Insider_Trading.xml"
+kind = "exchange"
+publisher = "NSE"
+
+[[feed]]
+name = "bse_announcements"
+url = "https://www.bseindia.com/data/xml/announcements.xml"
+kind = "exchange"
+publisher = "BSE"

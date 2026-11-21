@@ -203,6 +203,10 @@ class Settings(BaseSettings):
         "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
     )
     instruments_min_keep_ratio: float = Field(default=0.8, gt=0, le=1)
+    # news: the committed feed list (relative paths resolve from the repo root) and the size
+    # cap of one feed response
+    news_feeds_file: Path = Path("config/news_feeds.toml")
+    news_fetch_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
     # llm
     gemini_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
@@ -239,7 +243,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _resolve_and_check(self) -> Settings:
-        for name in ("data_dir", "log_dir", "backup_dir"):
+        for name in ("data_dir", "log_dir", "backup_dir", "news_feeds_file"):
             path: Path = getattr(self, name)
             if not path.is_absolute():
                 # frozen model: bypass the setattr guard for these derived values
