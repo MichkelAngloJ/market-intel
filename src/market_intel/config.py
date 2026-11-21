@@ -197,6 +197,12 @@ class Settings(BaseSettings):
     upstox_rate_per_minute: int = Field(default=500, ge=1)
     upstox_rate_per_30min: int = Field(default=2000, ge=1)
     upstox_rate_headroom: float = Field(default=0.8, gt=0, le=1)
+    # Upstox's public daily instrument file (no login), and the instrument refresh's safety
+    # valve: refuse a file that keeps fewer than this share of the currently active list.
+    upstox_instruments_url: str = (
+        "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+    )
+    instruments_min_keep_ratio: float = Field(default=0.8, gt=0, le=1)
     # llm
     gemini_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
@@ -212,6 +218,13 @@ class Settings(BaseSettings):
     alert_smtp_port: int = Field(default=587, ge=1, le=65535)  # 587 STARTTLS, 465 SSL
     alert_throttle_hours: float = Field(default=6, ge=0)
     alert_dry_run: bool = False
+
+    @field_validator("upstox_instruments_url")
+    @classmethod
+    def _https_only(cls, value: str) -> str:
+        if not value.startswith("https://"):
+            raise ValueError("UPSTOX_INSTRUMENTS_URL must start with https://")
+        return value
 
     @field_validator("display_timezone")
     @classmethod
