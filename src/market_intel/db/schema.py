@@ -108,8 +108,44 @@ instruments = Table(
     Column("listed_on", Date),
     Column("delisted_on", Date),
     Column("created_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
-    Column("updated_at", TIMESTAMPTZ, nullable=False, server_default=NOW),  # set by the app
-    UniqueConstraint("exchange", "segment", "symbol"),
+    Column("updated_at", TIMESTAMPTZ, nullable=False, server_default=NOW),  # set by a trigger
+    # IST dates of the first and latest instrument refresh that listed this instrument (0004).
+    Column("first_seen_on", Date),
+    Column("last_seen_on", Date),
+    # A symbol is unique among ACTIVE instruments only, so it can be reused after the old
+    # instrument goes inactive (0004; replaced UNIQUE (exchange, segment, symbol)).
+    Index(
+        "uq_instruments_active_symbol",
+        "exchange",
+        "segment",
+        "symbol",
+        unique=True,
+        postgresql_where=text("is_active"),
+    ),
+)
+
+# Every symbol change an instrument refresh sees (0004). Rows are never deleted.
+instrument_symbol_history = Table(
+    "instrument_symbol_history",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("instrument_id", BigInteger, ForeignKey("instruments.id"), nullable=False),
+    Column("old_symbol", Text, nullable=False),
+    Column("new_symbol", Text, nullable=False),
+    Column("changed_on", Date, nullable=False),  # IST date of the refresh that saw it
+    Index(None, "instrument_id"),
+)
+
+# The owner's watchlist (0004): at most 50 stocks (enforced by market_intel.watchlist). Its
+# contents live only in the database: never in the repo or the docs.
+WATCHLIST_NOTE_MAX = 200
+watchlist = Table(
+    "watchlist",
+    metadata,
+    Column("instrument_id", BigInteger, ForeignKey("instruments.id"), primary_key=True),
+    Column("added_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    Column("note", Text),
+    CheckConstraint(f"length(note) <= {WATCHLIST_NOTE_MAX}", name="note_length"),
 )
 
 # One row per instrument per trading day.

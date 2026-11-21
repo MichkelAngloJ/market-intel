@@ -86,6 +86,9 @@ class Instrument(Record):
     is_active: bool = True
     listed_on: date | None = None
     delisted_on: date | None = None
+    # Set by the instrument refresh (IST dates), never by a source: left None in records.
+    first_seen_on: date | None = None
+    last_seen_on: date | None = None
 
 
 class _Candle(Record):
