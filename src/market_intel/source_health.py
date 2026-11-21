@@ -19,6 +19,11 @@ d) ``volume_drop``: fewer items than 20% of the median of the last 10 content fe
    once 5 or more are known, and only if that median is above 0).
 e) ``no_publish_time``: more than 50% of the usable items had no publish time (the date format
    probably changed).
+f) ``silent``: 0 items in every content fetch of the last 14 days (only once the source has 14
+   days of content history).
+
+A source can also report a **block** (``record_block``: e.g. Google answering with a consent
+page): rule ``blocked``, one alert titled "<source> blocked".
 
 A rule stays an **active problem** until a later attempt passes it (a success clears a;
 the next content fetch re-checks b to e). Health's ``sources`` check turns WARN while an
@@ -35,7 +40,7 @@ import os
 import statistics
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +56,7 @@ FAILURES_IN_A_ROW = 3
 MALFORMED_SHARE = 0.5
 NO_TIME_SHARE = 0.5
 DROP_SHARE = 0.2
+SILENT_DAYS = 14
 ERROR_MAX_CHARS = 500
 NEXT_STEP = "the source may have changed: update config/news_feeds.toml or the parser"
 
@@ -60,6 +66,8 @@ RULES = {
     "malformed": "more than 50% of items malformed (no link or title)",
     "volume_drop": "item count below 20% of the median of the last 10 content fetches",
     "no_publish_time": "more than 50% of items without a publish time (format changed?)",
+    "silent": f"0 items in every content fetch for {SILENT_DAYS} days",
+    "blocked": "the source refused automated access (block detected)",
 }
 
 log = get_logger("market_intel.source_health")
@@ -91,6 +99,8 @@ def _new_source() -> dict[str, Any]:
         "last_attempt_at": None,
         "last_success_at": None,
         "counts": [],
+        "content_log": [],  # [UTC ISO time, items] of content fetches, last SILENT_DAYS + 1
+        "first_content_at": None,
         "problems": {},
     }
 
@@ -176,6 +186,20 @@ class SourceHealth:
                 median > 0 and items < DROP_SHARE * median,
                 f"{items} items, usual median {median:g}",
             )
+            now = self.now()
+            entry["first_content_at"] = entry["first_content_at"] or _iso(now)
+            keep_from = now - timedelta(days=SILENT_DAYS + 1)
+            log_entries = [
+                e for e in entry["content_log"] if datetime.fromisoformat(e[0]) >= keep_from
+            ] + [[_iso(now), items]]
+            entry["content_log"] = log_entries
+            window_from = now - timedelta(days=SILENT_DAYS)
+            recent = [n for when, n in log_entries if datetime.fromisoformat(when) >= window_from]
+            old_enough = datetime.fromisoformat(entry["first_content_at"]) <= window_from
+            checks["silent"] = (
+                old_enough and bool(recent) and all(n == 0 for n in recent),
+                f"0 items in all {len(recent)} content fetches of the last {SILENT_DAYS} days",
+            )
             fired = []
             for rule, (bad, detail) in checks.items():
                 if bad:
@@ -183,6 +207,17 @@ class SourceHealth:
                 else:
                     entry["problems"].pop(rule, None)
             entry["counts"] = (history + [items])[-KEEP_COUNTS:]
+        self._alert(source, fired, entry)
+        return fired
+
+    def record_block(self, source: str, reason: str) -> list[str]:
+        """The source refused automated access. Rule ``blocked`` until a later success."""
+        text = mask_text(reason)[:ERROR_MAX_CHARS]
+        with self._update(source) as entry:
+            entry["last_error"] = text
+            entry["last_attempt_at"] = _iso(self.now())
+            fired = [] if "blocked" in entry["problems"] else ["blocked"]
+            self._set(entry, ["blocked"], text)
         self._alert(source, fired, entry)
         return fired
 
@@ -199,6 +234,7 @@ class SourceHealth:
         entry["last_attempt_at"] = now
         entry["last_success_at"] = now
         entry["problems"].pop("failures", None)
+        entry["problems"].pop("blocked", None)
 
     def _set(self, entry: dict[str, Any], rules: list[str], detail: str) -> list[str]:
         for rule in rules:
@@ -212,7 +248,7 @@ class SourceHealth:
             log.warning("source_problem", source=source, rule=rule, detail=detail)
             self.alert(
                 "warning",
-                f"Source problem: {source} ({rule})",
+                f"{source} blocked" if rule == "blocked" else f"Source problem: {source} ({rule})",
                 f"Source: {source}\nRule: {RULES[rule]}\nDetail: {detail}\n"
                 f"Last error: {entry['last_error'] or 'none'}\nNext step: {NEXT_STEP}.",
                 key=f"source_health:{source}:{rule}",
