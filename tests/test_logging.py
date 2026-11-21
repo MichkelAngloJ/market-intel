@@ -184,9 +184,9 @@ def test_masks_url_credentials_in_text_and_event(tmp_path, monkeypatch):
     log.info("conn", note=f"via mongodb+srv://u:{FAKE}@cluster.example.invalid/db")
     logging.getLogger("thirdparty").error("failed %s", f"redis://:{FAKE}@cache.invalid:6379")
     text = file_text(settings)
-    assert "postgresql://demo_user:***@db.example.invalid" in text
-    assert "mongodb+srv://u:***@cluster.example.invalid" in text
-    assert "redis://:***@cache.invalid" in text
+    assert "postgresql://***@db.example.invalid" in text
+    assert "mongodb+srv://***@cluster.example.invalid" in text
+    assert "redis://***@cache.invalid" in text
     assert_masked(settings, console, FAKE)
 
 

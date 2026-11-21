@@ -17,7 +17,6 @@ whose own transaction fails can still be marked ``failed``.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
@@ -25,11 +24,9 @@ from typing import Any
 from market_intel.config import Settings
 from market_intel.db import postgres
 from market_intel.db.common import redactor
-from market_intel.logging_setup import MASK, get_logger, mask_text, mask_value
+from market_intel.logging_setup import get_logger, mask_text, mask_value
 
 ERROR_MAX_CHARS = 2000
-# Everything between "scheme://" and "@" (user name and password) becomes ***.
-_URL_USERINFO = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^\s/@]+@")
 
 log = get_logger("market_intel.ingestion")
 
@@ -51,15 +48,14 @@ class Run:
 
 
 def masked_error(exc: BaseException, url: str | None = None) -> str:
-    """``Type: message`` with URL user names, passwords and loaded secrets masked, cut to a
-    safe length. Stricter than log masking: the stored row also hides user names in URLs.
+    """``Type: message`` with the user part of URLs and loaded secrets masked (the same
+    masking as logs), cut to a safe length.
 
     ``url`` (the database URL) is removed explicitly too, in case logging isn't configured.
     """
     text = f"{type(exc).__name__}: {exc}"
     if url:
         text = redactor(url)(text)
-    text = _URL_USERINFO.sub(rf"\1{MASK}@", text)
     text = mask_text(text)
     if len(text) > ERROR_MAX_CHARS:
         text = text[: ERROR_MAX_CHARS - 3] + "..."

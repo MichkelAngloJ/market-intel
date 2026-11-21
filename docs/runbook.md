@@ -61,7 +61,7 @@ needs a fix now.
 | `config` WARN | Alert settings missing | Add the `ALERT_*` settings, or accept that no emails are sent |
 | `config_upstox` / `config_llm` WARN | Only some of the group's settings are set | Set all of them, or none |
 | `databases` FAIL, both unreachable on the `full` profile | Docker Desktop or the local databases aren't running | Start them (see [Local Docker databases](#local-docker-databases)) and run health again |
-| `databases` FAIL, MongoDB unreachable | The cloud database's IP access list no longer includes this network (new network or changed IP) | Add the current IP in the provider console |
+| `databases` FAIL, MongoDB unreachable | Not a network list: the cloud MongoDB accepts any address (decision 2026-11-20); a connection failure means a password, TLS or service problem | Check the password in `.env`, the TLS options in the connection string and the provider's status page |
 | `databases` FAIL, Postgres unreachable | The database was asleep and the first connect timed out; or a password changed | Run health again; if it still fails, check the password in `.env` |
 | `databases` FAIL, no TLS | A connection string without TLS to a remote host | Add `sslmode=require` (Postgres) or use `mongodb+srv://` / `tls=true` (MongoDB) |
 | `databases` WARN, storage | The free tier is 80% full | Clean up or plan a bigger tier |
@@ -92,7 +92,8 @@ If several Postgres checks fail together (`databases`, `pg_migrations`, `data_fr
    `APP_PROFILE`: `restricted` on the testing laptop, `full` on the main laptop (see
    [Laptops and profiles](architecture.md#laptops-and-profiles)). Leave settings empty when
    a default is fine.
-6. Allow this laptop's network in the MongoDB access list (provider console).
+6. No network step for MongoDB: the cloud MongoDB accepts any address (decision
+   2026-11-20); a connection failure means a password, TLS or service problem.
 7. `uv run python -m market_intel.health`: everything should be OK or SKIP.
 
 ### Main laptop setup
@@ -121,7 +122,8 @@ The main laptop runs the `full` profile and Docker. In order:
 5. `uv sync`, then `uv run pre-commit install`.
 6. **Copy `.env` securely** from the other laptop (USB drive or password manager; never by
    email, chat or git) and set `APP_PROFILE=full`.
-7. **Allow this laptop's network** in the MongoDB access list (provider console).
+7. **No MongoDB network step:** the cloud MongoDB accepts any address (decision
+   2026-11-20); a connection failure means a password, TLS or service problem.
 8. **Health check:** `ALERT_DRY_RUN=true uv run python -m market_intel.health` (in Git Bash;
    in PowerShell set `$env:ALERT_DRY_RUN = "true"` first). Everything should be OK or SKIP.
 9. **Quit Docker Desktop when idle:** it holds its memory (up to the WSL cap) even when no

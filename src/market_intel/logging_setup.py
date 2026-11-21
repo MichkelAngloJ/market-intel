@@ -67,8 +67,9 @@ LOG_FILE_NAME = log_file_name(DEFAULT_COMPONENT)  # used when no component is gi
 _SENSITIVE_KEY = re.compile(
     r"key|secret|password|passwd|token|uri|url|authorization|cookie", re.IGNORECASE
 )
-# scheme://user:password@host -> mask only the password.  # pragma: allowlist secret
-_URL_CREDENTIALS = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:/@]*:)([^\s@/]+)(@)")
+# The user part of a URL: everything between "scheme://" and "@" (user name and password).
+# It can't hold "/", "?" or "#", so an "@" later in a path or query is left alone.
+URL_USERINFO = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^\s/?#@]+@")
 # Keys structlog itself adds; never masked even if they match the pattern above.
 _RESERVED_KEYS = {"event", "level", "logger", "timestamp", "exception"}
 
@@ -79,9 +80,15 @@ _HANDLER_TAG = "_market_intel_handler"
 # --- masking -----------------------------------------------------------------------------
 
 
+def mask_url_userinfo(text: str) -> str:
+    """Replace the whole user part of every URL (user name, and password if any) with ***,
+    so ``scheme://<user part>@host`` becomes ``scheme://***@host``. Hosts stay visible."""
+    return URL_USERINFO.sub(rf"\1{MASK}@", text)
+
+
 def mask_text(text: str) -> str:
-    """Mask URL credentials and any loaded secret value inside a string."""
-    text = _URL_CREDENTIALS.sub(rf"\1{MASK}\3", text)
+    """Mask the user part of URLs and any loaded secret value inside a string."""
+    text = mask_url_userinfo(text)
     for secret in _secret_values:  # longest first, so overlapping secrets mask fully
         text = text.replace(secret, MASK)
     return text

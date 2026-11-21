@@ -251,7 +251,7 @@ def test_subject_body_and_context_are_masked(tmp_path, monkeypatch):
     )
     msg = result.message
     whole = msg["Subject"] + msg.get_content()
-    assert "postgresql://u:***@db.invalid" in msg["Subject"]
+    assert "postgresql://***@db.invalid" in msg["Subject"]
     for leaked in (FAKE, FAKE_APP_PW, NOT_LOADED):
         assert leaked not in whole
     assert FAKE not in log_text(settings)
