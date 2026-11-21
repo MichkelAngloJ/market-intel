@@ -14,10 +14,12 @@ All commands run from `<repo folder>` with `uv run` in front.
    [Local Docker databases](#local-docker-databases)).
 4. `uv run python -m market_intel.health` and fix anything that isn't OK or SKIP (see
    [Reading the health output](#reading-the-health-output)).
-5. **Instruments (once a day, after ~06:00 IST):** `ALERT_DRY_RUN=true uv run python -m
-   market_intel.instruments refresh` (drop `ALERT_DRY_RUN=true` once real alerts are wanted;
-   see [Instruments and watchlist](#instruments-and-watchlist)). From 1.8 the scheduler does
-   this.
+5. **Data (until the scheduler, 1.8, does it):** once a day after ~06:00 IST
+   `uv run python -m market_intel.instruments refresh` (see
+   [Instruments and watchlist](#instruments-and-watchlist)); news whenever you like,
+   `uv run python -m market_intel.news fetch` (see
+   [News feeds and source health](#news-feeds-and-source-health)). Your real runs send real
+   alerts; `ALERT_DRY_RUN=true` is only for Claude Code's tests and demos.
 6. Work.
 7. `uv run pytest` and `uv run pre-commit run --all-files`.
 8. `git push`, then check that CI is green.
@@ -78,6 +80,7 @@ needs a fix now.
 | `laptop` WARN / FAIL | Under 10 GB / 2 GB free disk | Free up space; check the size of `logs/` and `data/` |
 | `backup_age` WARN | The newest complete backup (with a manifest) is older than `BACKUP_MAX_AGE_DAYS` (default 7), or there is none | Run the backup: `uv run python -m market_intel.backup` (databases running), then copy `BACKUP_DIR` to external storage |
 | `data_freshness` WARN | The last ingestion run failed | Read its error in `ingestion_runs` and the logs (from Phase 1) |
+| `sources` WARN | A feed (or later another source) has an active source-health problem | Run `uv run python -m market_intel.news status`, then see [News feeds and source health](#news-feeds-and-source-health) |
 | `llm_spend` WARN / FAIL | Spend this IST month is at `LLM_WARN_PCT` / at the cap | Stop paid LLM calls; raising the cap needs a decision-log entry (rule R2) |
 
 If several Postgres checks fail together (`databases`, `pg_migrations`, `data_freshness`,
@@ -271,6 +274,7 @@ JSON object per line, times in UTC:
 | `market_intel.alerts --test` | `logs/alerts.jsonl` |
 | `market_intel.instruments` (refresh, sector import) | `logs/instruments.jsonl` |
 | `market_intel.watchlist` | `logs/watchlist.jsonl` (counts only, never symbols) |
+| `market_intel.news` (fetch, status) | `logs/news.jsonl` |
 | Code that names no component | `logs/market_intel.jsonl` |
 | Later Phase 1 jobs | `logs/<component>.jsonl`, named in each job's section |
 
@@ -306,13 +310,13 @@ starts a new row.
 
 ## Instruments and watchlist
 
-How it works: [architecture](architecture.md#instruments-and-watchlist). Commands that can
-alert run with `ALERT_DRY_RUN=true` until real alerts are wanted (in PowerShell set
-`$env:ALERT_DRY_RUN = "true"` first).
+How it works: [architecture](architecture.md#instruments-and-watchlist). **Alert rule:**
+`ALERT_DRY_RUN=true` is only for Claude Code's tests and demos; the owner's real runs use
+real alerts, so a refused refresh reaches your inbox.
 
 | Task | Command |
 |---|---|
-| Daily refresh (after ~06:00 IST, when Upstox refreshes its file) | `ALERT_DRY_RUN=true uv run python -m market_intel.instruments refresh` |
+| Daily refresh (after ~06:00 IST, when Upstox refreshes its file) | `uv run python -m market_intel.instruments refresh` |
 | See what a refresh would change, save nothing | `uv run python -m market_intel.instruments refresh --dry-run` |
 | Refresh from a local file instead of downloading | `uv run python -m market_intel.instruments refresh --file PATH` |
 | Monthly sector import, dry run first | `uv run python -m market_intel.instruments import-sectors PATH --dry-run` |
@@ -351,6 +355,46 @@ Empty values never overwrite a sector, and stocks outside the Nifty 500 keep no 
 stock prints a risk note (trade-to-trade, often under exchange surveillance). The list lives
 only in the database: never copy it into the repo, the docs or a planner prompt that ends up in
 the repo. Choosing stocks is the owner's decision.
+
+## News feeds and source health
+
+How it works: [architecture](architecture.md#news-and-exchange-feeds) and
+[source health](architecture.md#source-health).
+
+| Task | Command |
+|---|---|
+| Fetch every enabled feed (each at most once per 10 minutes) | `uv run python -m market_intel.news fetch` |
+| One feed only | `uv run python -m market_intel.news fetch --feed NAME` |
+| Ignore the 10-minute interval (never ignores `Retry-After`) | `uv run python -m market_intel.news fetch --force` |
+| Fetch and parse, save nothing | `uv run python -m market_intel.news fetch --dry-run` |
+| Per-feed status and problems | `uv run python -m market_intel.news status` |
+
+**Reading a fetch.** The first line gives the run status (`success`, `partial` or `failed`)
+and the totals; then one line per feed: new and duplicate items (a duplicate keeps the first
+stored copy), malformed entries and, for exchange feeds, how many items matched a stock
+(matched, ambiguous, unmatched); or `not_modified`, `skipped (interval)`,
+`skipped (retry_after)` or `failed: <reason>`. A `partial` run names the failed feeds in
+`ingestion_runs.error`; a `failed` run (every attempted feed failed) exits with code 1.
+
+**A source-health alert** ("Source problem: rss:<feed> (<rule>)") means a feed broke or
+changed. The email names the rule, the masked last error and the next step.
+
+| Rule | Likely cause | Fix |
+|---|---|---|
+| `failures` (3 in a row) | The site is down, moved the feed, or now refuses us (403/429) | Open the feed URL in a browser. If it moved, update `url` in `config/news_feeds.toml`. If it refuses automated readers, set `enabled = false`: never change the user agent or work around a block |
+| `empty` | The URL now returns a web page or an error page instead of a feed | As above; the publisher may have retired the feed |
+| `malformed` | Items lost their link or title | Check the feed in a browser; the parser may need an update (a code task) |
+| `volume_drop` | The feed returns far fewer items than usual | Often temporary; if it lasts, check the feed URL and the publisher's RSS page |
+| `no_publish_time` | The date format changed | The parser needs the new format (a code task); until then items use the fetch time |
+
+A rule stays an active problem (health `sources` WARN, `news status` shows it) until a later
+fetch passes it. Alerts repeat at most once per `ALERT_THROTTLE_HOURS` per feed and rule.
+After a fix, run `uv run python -m market_intel.news fetch --feed NAME --force` and check
+`news status`.
+
+The feed list is in the repo; nothing fetched (headlines, state files) is ever committed. The
+publishers' RSS terms usually allow personal, non-commercial use with a link back; ours stays
+local and is never republished.
 
 ## Common problems
 

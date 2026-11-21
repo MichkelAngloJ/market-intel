@@ -39,14 +39,14 @@ flowchart LR
     UPFILE[Upstox public instrument file] -->|daily refresh| CLI
     UPSTOX[Upstox API - planned] -.-> CLI
     YF[yfinance - planned] -.-> CLI
-    RSS[RSS news - planned] -.-> CLI
+    RSS[RSS news and exchange feeds] -->|news fetch| CLI
     LLM[LLMs - planned] -.-> CLI
     MODELS[Models - planned] -.-> CLI
     SCHED[Scheduler - planned] -.-> CLI
     CLI -.-> DASH[Dashboard - planned]
 
     classDef planned stroke-dasharray: 5 5
-    class UPSTOX,YF,RSS,LLM,MODELS,SCHED,DASH,COLAB planned
+    class UPSTOX,YF,LLM,MODELS,SCHED,DASH,COLAB planned
 ```
 
 ### Planned data flow
@@ -88,6 +88,8 @@ flowchart LR
 | `python -m market_intel.instruments refresh` | Refreshes NSE instruments from Upstox's public file (`--file`, `--dry-run`) |
 | `python -m market_intel.instruments import-sectors PATH` | Sets sectors from the hand-downloaded Nifty 500 list CSV (`--dry-run`) |
 | `python -m market_intel.watchlist add`, `remove`, `list` | The watchlist (max 50 stocks), stored only in the database |
+| `python -m market_intel.news fetch` | Fetches the RSS news and exchange feeds into `news_items` (`--feed`, `--force`, `--dry-run`) |
+| `python -m market_intel.news status` | Per-feed fetch and source-health status |
 
 All are run with `uv run` in front.
 
@@ -144,7 +146,7 @@ see `src/market_intel/config.py`.
 | `.env` (secrets and machine settings) | Each laptop, copied by hand | **Never** |
 | `docker/compose.env` (Docker database passwords) | The main laptop | **Never** |
 | `logs/` | JSON log files on each laptop, one per component (`LOG_DIR`) | Never |
-| `data/` | Local data and state, e.g. `data/state/alert_throttle.json` and the downloaded instrument files in `data/raw/upstox/instruments/` (`DATA_DIR`) | Never |
+| `data/` | Local data and state, e.g. `data/state/alert_throttle.json` the downloaded instrument files in `data/raw/upstox/instruments/`, and the news feed and source-health state in `data/state/` (`DATA_DIR`) | Never |
 | `drive_sync/` | Local folder for exports and backups | Never |
 | Postgres tables | The Postgres database (see [Postgres schema v1](#postgres-schema-v1)) | No |
 | MongoDB collections | The MongoDB database (see [MongoDB](#mongodb)) | No |
@@ -318,7 +320,7 @@ validators and indexes are listed in `src/market_intel/mongo/schemas.py`. Every 
 
 | Collection | Holds | Unique key |
 |---|---|---|
-| `news_items` | One news article: source, URL, title, and **`published_at`**, the time it became public | `url_hash` (sha256 of the normalised URL) |
+| `news_items` | One news item or exchange announcement: source, feed, kind (`news` or `exchange`), publisher, URL, title, summary, `published_at` (with its source), `fetched_at`, **`available_at`** (when this system could know it), `exchange_meta` and `symbols` | `url_hash` (sha256 of the normalised URL) |
 | `llm_extractions` | Events an LLM read from one article (RBI action, results surprise, order win, sentiment, ...), with its `published_at` | `news_item_id` + `prompt_version` |
 | `prediction_audit` | One record per prediction: inputs, model, SHAP reasons, news and LLM calls used, signal, and later the outcome | `prediction_id` |
 | `_healthcheck` | Used only by `db_check`'s write test | |
@@ -326,8 +328,13 @@ validators and indexes are listed in `src/market_intel/mongo/schemas.py`. Every 
 - **Validators:** each collection has a `$jsonSchema` validator (`strict`, `error`) matching
   the models, with `additionalProperties: false`. A document with a missing field, a wrong type
   or an unknown field is rejected. So **run `mongo_setup` before code writes a new field.**
-- **Indexes:** unique keys as above, plus time indexes (`published_at`, `created_at`) for
-  queries by symbol, model and outcome status.
+- **Indexes:** unique keys as above, plus time indexes (`published_at`, `available_at`,
+  `kind` + `available_at`, `created_at`) for queries by time, kind, symbol, model and
+  outcome status.
+- **New fields (1.2):** `news_items` gained `kind`, `publisher`, `feed_name`,
+  `available_at`, `published_at_source` and the optional `exchange_meta` object (its own
+  `additionalProperties: false`). The model fills `available_at` and checks that it equals
+  max(`published_at`, `fetched_at`); the validator requires it.
 - **`mongo_setup`** (setup login) is the only thing that creates collections, validators and
   indexes. It is idempotent: it creates what is missing, updates validators that changed
   (collMod) and prints a summary; a second run prints "nothing to change". It never drops a
@@ -413,7 +420,8 @@ tasks 1.2 to 1.7.
     the **app login**, on its own autocommit connection, so the row is visible while the job
     runs and can still be marked failed if the job's own transaction breaks.
   - On success: `finished_at`, status `success` and `rows_written` (the job counts rows with
-    `run.add_rows(n)`).
+    `run.add_rows(n)`). A job whose parts partly failed calls `run.mark_partial(reason)`:
+    the run ends `partial`, with the masked reason in `error` (from 1.2).
   - On any error, including Ctrl+C: status `failed`, `finished_at`, the rows counted so far
     and a **masked** error (`Type: message`, with the whole user part of URLs and loaded
     secrets removed, the same rule as logs, at most 2000 characters); then the exception is
@@ -475,6 +483,68 @@ Task 1.1 (decision 2026-11-22). Commands: `market_intel.instruments` and
   the docs, and the log records counts only. Choosing stocks is the owner's decision; the
   system doesn't recommend.
 
+## News and exchange feeds
+
+Task 1.2 (decisions 2026-11-22: legitimate channels only; news and exchange feeds). Command:
+`market_intel.news` (`fetch`, `status`); logs to `logs/news.jsonl`.
+
+- **Feeds:** `config/news_feeds.toml` (committed; `NEWS_FEEDS_FILE`): 6 news feeds (Economic
+  Times, Mint, Business Standard) and 5 official exchange feeds (NSE announcements, financial
+  results, board meetings, insider trading; BSE announcements). Each has a name, URL, kind
+  (`news` or `exchange`), publisher, `min_interval_minutes` (default 10) and `enabled`.
+  Moneycontrol is excluded (it blocks non-browser clients).
+- **Polite fetching** (`market_intel.sources.rss`, httpx): the honest user agent
+  `market-intel/<version> (personal research; RSS reader)`, never a browser's; timeouts; a
+  size cap (`NEWS_FETCH_MAX_BYTES`, default 5 MB); conditional requests (ETag /
+  Last-Modified); at most one request per feed per `min_interval_minutes` (`--force` ignores
+  that). A 403, 429 or 5xx is recorded as a failure, `Retry-After` is respected (even by
+  `--force`), and the request is never repeated with another identity. **Item links are never
+  followed**: no article pages, no PDF downloads. Per-feed fetch state (validators, times,
+  Retry-After) is in `data/state/news_feeds.json`, written atomically under a file lock.
+- **Parsing:** feedparser on the fetched bytes (never a URL). Title (HTML stripped, at most 500
+  characters), summary (HTML stripped, at most 2000) and link. The URL is normalised and its
+  sha256 is `url_hash`; an item already stored keeps its **first** document unchanged.
+  Entries without a link or title are counted as malformed.
+- **Timing fields** (leakage safety): `published_at` is the feed's date in UTC; if missing, the
+  fetch time (`published_at_source = "fetched"`); if more than 5 minutes in the future, the
+  fetch time (`"clamped"`); otherwise `"feed"`. Exchange feeds give IST times without a zone
+  ("21-Nov-2026 18:30:00"), which are read as IST. `fetched_at` is when we first fetched the
+  item; **`available_at` = max(`published_at`, `fetched_at`)** is when this system could know
+  it, and Phase 2 features use `available_at`.
+- **Exchange items:** `exchange_meta` keeps what the feed says (exchange, raw company name, the
+  exchange's own code where given: BSE's scrip code, subject, attachment URL; never
+  downloaded). `symbols` is set only on a **clear match** with an active NSE stock: the exact
+  NSE symbol, or exactly one stock with the same normalised company name (case, punctuation,
+  "&"/"and", "Ltd"/"Limited" ignored). Ambiguous or no match: `symbols = []`, counted in the
+  summary. News items get `symbols = []`; Phase 2 extracts companies.
+- **Runs:** one `ingestion_run(job="news_fetch", source="rss")`; `rows_written` = new
+  documents. All attempted feeds OK (or skipped) -> `success`; some failed and at least one
+  OK -> `partial`, with the failed feeds named; all attempted failed -> `failed`.
+  `--dry-run` fetches and parses but saves nothing (no documents, state, health or run).
+- **`news status`:** per feed: last fetch, last success, items in the last content fetch,
+  consecutive failures, documents stored and active source-health problems.
+
+## Source health
+
+`market_intel.source_health`, reusable by every source (RSS from 1.2; later files and APIs).
+Each attempt is reported as a failure, "not modified" or content (usable, malformed and
+undated item counts). State is in `data/state/source_health.json` (counts and masked error
+text only), written atomically under a file lock.
+
+| Rule | Fires when |
+|---|---|
+| `failures` | 3 consecutive failures |
+| `empty` | content arrived but 0 items were parsed: the body wasn't a recognisable feed, or every entry was unusable (a well-formed feed that is simply empty is not a problem) |
+| `malformed` | more than 50% of entries had no link or title |
+| `volume_drop` | fewer items than 20% of the median of the last 10 content fetches (only after 5 or more, and only if that median is above 0) |
+| `no_publish_time` | more than 50% of usable items had no publish time (the date format probably changed) |
+
+Each rule queues one WARNING alert per source and rule, throttled by the alert throttle
+(`ALERT_THROTTLE_HOURS`). The alert names the source, the rule, the masked last error and the
+next step: "the source may have changed: update config/news_feeds.toml or the parser". A rule
+stays an **active problem** until a later attempt passes it; health's `sources` check is WARN
+while an enabled source has one, SKIP before any fetch, otherwise OK.
+
 ## Health check
 
 `uv run python -m market_intel.health` runs every check and prints `STATUS | CHECK | MESSAGE`;
@@ -499,7 +569,8 @@ Data Health page (no secrets; hosts may appear).
 | `unexpected_collections` | Collections not in `schemas.py` = WARN |
 | `laptop` | Free disk on the repo's drive (WARN below 10 GB, FAIL below 2 GB), plus the size of `logs/` and `data/` |
 | `backup_age` | `full` profile only (SKIP otherwise). Age of the newest complete backup (one with a manifest) in `BACKUP_DIR`, from the manifest's timestamp; no database access. Older than `BACKUP_MAX_AGE_DAYS` (default 7), or no manifest or folder = WARN; never FAIL |
-| `data_freshness` | The latest `ingestion_runs` row. SKIP with no runs; WARN if the last run failed |
+| `data_freshness` | The latest `ingestion_runs` row. SKIP with no runs; WARN if the last run failed (a `partial` run is OK, with its status shown) |
+| `sources` | Source health (see [Source health](#source-health)). SKIP before any source was fetched; WARN while an enabled source has an active problem; otherwise OK |
 | `upstox_token` | SKIP until Phase 1 |
 | `llm_spend` | This IST month's spend against `LLM_MONTHLY_CAP_INR`. WARN at `LLM_WARN_PCT`, FAIL at 100% |
 
@@ -564,7 +635,8 @@ Data Health page (no secrets; hosts may appear).
   `db_check`
   and `health --json` (no FAIL allowed). It runs only when a path in its filter changes:
   `docker/`, the `db`, `mongo` and `sources` packages, `db_check.py`, `health.py`,
-  `ingestion.py`, `instruments.py`, `watchlist.py`, `mongo_setup.py`,
+  `ingestion.py`, `instruments.py`, `watchlist.py`, `news.py`, `source_health.py`,
+  `config/news_feeds.toml`, `mongo_setup.py`,
   `config.py`, `migrations/`, `alembic.ini`, `tests/integration/`, `pyproject.toml`, `uv.lock`
   and the workflow file.
 - **Docs test** (`tests/test_docs.py`) checks links, the README length, Mermaid blocks and the
@@ -583,7 +655,10 @@ after the current one passes validation.
 Data pipeline: instruments and daily candles, `ingestion_runs`, `data_gaps`, the Upstox token.
 Built as tasks 1.0 to 1.10 (see [progress](progress.md)). The groundwork from 1.0 is described
 in [Data sources, rate limits and ingestion runs](#data-sources-rate-limits-and-ingestion-runs);
-instruments and the watchlist (1.1) in [Instruments and watchlist](#instruments-and-watchlist).
+instruments and the watchlist (1.1) in [Instruments and watchlist](#instruments-and-watchlist);
+news (1.2) in [News and exchange feeds](#news-and-exchange-feeds) and
+[Source health](#source-health). What each factor is and when it's built:
+[factor map](factors.md).
 
 ### Phase 2 — Events and features
 
