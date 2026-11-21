@@ -94,9 +94,10 @@ NEWS_ITEMS_SCHEMA = _object(
         "fetched_at": DATE,
         "available_at": DATE,
         "published_at_source": _enum("feed", "fetched", "clamped"),
-        "kind": _enum("news", "exchange"),
+        "kind": _enum("news", "exchange", "company_news"),
         "publisher": _nullable(STR),
         "feed_name": _nullable(STR),
+        "match_confidence": _nullable(_enum("high", "low")),
         "exchange_meta": _nullable(
             _object(
                 ["exchange"],

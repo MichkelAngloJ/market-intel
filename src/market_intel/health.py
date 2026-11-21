@@ -468,7 +468,9 @@ def check_sources(ctx: Context) -> CheckResult:
     """WARN while an enabled source has an active problem (see market_intel.source_health)."""
     settings = ctx.settings
     state = source_health.load_state(source_health.state_path(settings.data_dir))
+    # The RSS feeds that are enabled, plus Google News per-company fetching (1.2b).
     enabled = [f.source for f in load_feeds(settings.news_feeds_file) if f.enabled]
+    enabled.append("google_news")
     seen = [name for name in enabled if name in state]
     if not seen:
         return CheckResult("sources", "SKIP", "no source fetched yet")

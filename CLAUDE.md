@@ -31,9 +31,12 @@ you implement exactly ONE task per session and report back. Workflow:
   - no force-push or history rewrite unless the task says so
   - commits use the owner's GitHub no-reply address (per-repo config)
 - **Tests and decisions:** never weaken or edit existing tests to make them pass; never edit
-  old decision entries (append new ones). One standing exception (planner, 2026-11-22): when a
-  task adds a new health check, adding ONLY its entry to tests that list every check by name
-  is allowed (append only, no other change); list each such edit in the report.
+  old decision entries (append new ones). Standing exceptions (planner, 2026-11-22), each
+  append only with no other change, and each edit listed in the report:
+  - when a task adds a new health check, adding ONLY its entry to tests that list every check
+    by name;
+  - when a task adds a new allowed value to an enum, adding ONLY that value to tests that list
+    the enum's values.
 - **Databases:**
   - App code uses the app logins (`POSTGRES_URL`, `MONGODB_URI`). The owner/setup logins
     (`POSTGRES_ADMIN_URL`, `MONGODB_ADMIN_URI`) are only for alembic, `mongo_setup` and

@@ -67,7 +67,7 @@ def test_validator_requires_the_new_fields_and_lists_the_enums():
     required = set(NEWS_ITEMS_SCHEMA["required"])
     assert {"available_at", "published_at_source", "kind"} <= required
     props = NEWS_ITEMS_SCHEMA["properties"]
-    assert props["kind"]["enum"] == ["news", "exchange"]
+    assert props["kind"]["enum"] == ["news", "exchange", "company_news"]
     assert props["published_at_source"]["enum"] == ["feed", "fetched", "clamped"]
     meta = props["exchange_meta"]
     assert meta["additionalProperties"] is False and meta["required"] == ["exchange"]
