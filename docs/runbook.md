@@ -45,8 +45,10 @@ Useful extras:
 | Send a test alert email (ignores the throttle) | `uv run python -m market_intel.alerts --test` |
 | Build the test alert without sending it | `uv run python -m market_intel.alerts --test --dry-run` |
 | Lint and format checks | `uv run ruff check .` and `uv run ruff format --check .` |
-| Last 20 log lines (PowerShell) | `Get-Content logs/market_intel.jsonl -Tail 20` |
-| Only errors (PowerShell) | `Get-Content logs/market_intel.jsonl \| ConvertFrom-Json \| Where-Object level -eq "error"` |
+| Last 20 lines of one component's log (PowerShell) | `Get-Content logs/health.jsonl -Tail 20` |
+| Only errors (PowerShell) | `Get-Content logs/health.jsonl \| ConvertFrom-Json \| Where-Object level -eq "error"` |
+
+Each program has its own log file; see [Logs and ingestion runs](#logs-and-ingestion-runs).
 
 ## Reading the health output
 
@@ -249,6 +251,50 @@ changing the secret matters more than rewriting history.
 The same order applies to a **new field** on an existing collection: validators reject unknown
 fields, so `mongo_setup` must update the validator before code writes the field.
 
+## Logs and ingestion runs
+
+**Where each log is.** Every program writes only to its own file in `logs/` (`LOG_DIR`), one
+JSON object per line, times in UTC:
+
+| Program | Log file |
+|---|---|
+| `market_intel.health` | `logs/health.jsonl` |
+| `market_intel.db_check` | `logs/db_check.jsonl` |
+| `market_intel.backup` | `logs/backup.jsonl` |
+| `market_intel.mongo_setup` | `logs/mongo_setup.jsonl` |
+| `market_intel.alerts --test` | `logs/alerts.jsonl` |
+| Code that names no component | `logs/market_intel.jsonl` |
+| Phase 1 jobs (from 1.1) | `logs/<job name>.jsonl` |
+
+Each file rotates at UTC midnight on its own (older days get a date suffix; 30 are kept), so
+two programs running at once never block each other. Alerts that a program queued but
+couldn't send before exiting are logged there as not sent.
+
+**What a failed ingestion run looks like.** Every data-loading job writes one row to the
+Postgres table `ingestion_runs`: `status` is `running` while it works, then `success` (with
+`rows_written`) or `failed`. A failed row keeps the rows counted so far, `finished_at` and an
+`error` like `ConnectionError: ... https://***@api.example/...`: the error type and message,
+with user names, passwords and secrets masked, cut to 2000 characters. Health's
+`data_freshness` check turns WARN when the latest run failed.
+
+To read the latest runs, run this SQL with any client using the **app login**
+(`POSTGRES_URL`):
+
+```sql
+SELECT id, job, source, status, rows_written, started_at, finished_at, error
+FROM ingestion_runs ORDER BY started_at DESC LIMIT 20;
+```
+
+On the `full` profile the container's own login works without a password:
+`docker compose -f docker/compose.yaml --env-file docker/compose.env exec postgres sh -c
+'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`, then the query above.
+
+Then open that job's log (`logs/<job name>.jsonl`) around `started_at`: its
+`ingestion_run_failed` line has the same masked error, and the lines before it show what the
+job was doing. A row stuck at `running` with no `finished_at` means the process was killed
+before it could record the end (power off, a crash of Python itself); the next run of the job
+starts a new row.
+
 ## Common problems
 
 - **"uv not found"** after installing uv: fully restart VS Code (or the laptop) so it picks up
@@ -258,7 +304,8 @@ fields, so `mongo_setup` must update the validator before code writes the field.
 - **VS Code asks to enable `python.terminal.useEnvFile`:** do **not** enable it. It would load
   `.env` into every terminal; the project reads `.env` itself.
 - **An unexpected real alert email:** check whether the same alert was throttled before
-  (`data/state/alert_throttle.json`) and what ran at that time (logs). Tests, demos and CI must
+  (`data/state/alert_throttle.json`) and what ran at that time (`logs/alerts.jsonl` and the
+  log of the program that alerted). Tests, demos and CI must
   use `ALERT_DRY_RUN=true`.
 - **Colab stops at the Python version check:** pick runtime version 2026.07 (Python 3.12)
   under *Runtime > Change runtime type > Runtime version*; if it's no longer offered, tell the

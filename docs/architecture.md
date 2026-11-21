@@ -139,7 +139,7 @@ see `src/market_intel/config.py`.
 | Code, docs, tests | Public GitHub repo (source-available, see [LICENSE](../LICENSE.md)) | Yes |
 | `.env` (secrets and machine settings) | Each laptop, copied by hand | **Never** |
 | `docker/compose.env` (Docker database passwords) | The main laptop | **Never** |
-| `logs/` | JSON log files on each laptop (`LOG_DIR`) | Never |
+| `logs/` | JSON log files on each laptop, one per component (`LOG_DIR`) | Never |
 | `data/` | Local data and state, e.g. `data/state/alert_throttle.json` (`DATA_DIR`) | Never |
 | `drive_sync/` | Local folder for exports and backups | Never |
 | Postgres tables | The Postgres database (see [Postgres schema v1](#postgres-schema-v1)) | No |
@@ -337,20 +337,75 @@ validators and indexes are listed in `src/market_intel/mongo/schemas.py`. Every 
 
 ## Logging and alerts
 
-- **Logs:** `logs/market_intel.jsonl` (folder from `LOG_DIR`): one JSON object per line,
-  timestamps in UTC. A new file starts at UTC midnight and 30 days are kept. The console shows
-  the same events in readable form, in `DISPLAY_TIMEZONE`. The level comes from `LOG_LEVEL`
-  (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Each run binds a `run_id` and `component` to its log
-  lines.
-- **Alerts** (`market_intel.alerts.send_alert`): `info` is logged only; `warning` and
-  `critical` are also emailed to `ALERT_EMAIL_TO` through Gmail SMTP.
+- **Logs, one file per component:** each program passes its name to `configure_logging`
+  and writes only to `logs/<component>.jsonl` (folder from `LOG_DIR`): `health.jsonl`,
+  `db_check.jsonl`, `backup.jsonl`, `mongo_setup.jsonl`, `alerts.jsonl`, and later one per job.
+  Code that names no component writes to `market_intel.jsonl`. Component names are lower-case
+  letters, digits and `_`.
+  - One JSON object per line, timestamps in UTC. Each file starts anew at UTC midnight and
+    keeps 30 days, **rotated independently**: two programs running at once never share (or
+    lock) a file, which Windows' file locking would otherwise break at rotation time.
+  - Masking (below) applies to every file and the console.
+  - The console shows the same events in readable form, in `DISPLAY_TIMEZONE`. The level comes
+    from `LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Each run binds a `run_id` and
+    `component` to its log lines.
+- **Alerts** (`market_intel.alerts`): `info` is logged only; `warning` and `critical` are
+  also emailed to `ALERT_EMAIL_TO` through Gmail SMTP.
+  - **Non-blocking:** jobs call `queue_alert(...)`, which hands the alert to a background
+    thread and returns at once. At exit the queue is flushed with a bounded wait (60 s);
+    anything still queued then is logged as not sent. `send_alert(...)` still sends inline,
+    for commands that want the result.
   - **Throttle:** the same alert (level + title, or an explicit `key`) is emailed at most once
     per `ALERT_THROTTLE_HOURS` (default 6, `0` = off). State is kept in
-    `data/state/alert_throttle.json`. Suppressed alerts are still logged.
+    `data/state/alert_throttle.json`. Suppressed alerts are still logged. The state is read
+    and updated under a cross-process file lock, and the window is claimed before the email
+    goes out (and given back if sending fails), so two programs alerting at the same moment
+    send at most one email per window.
   - **Dry-run:** `ALERT_DRY_RUN=true` builds emails without sending them. Tests, demos and CI
     always use it.
   - A failed send is retried once after 5 s, then logged as an error; it never crashes the
     caller. Without alert settings, commands log `alerts_not_configured` and carry on.
+
+## Data sources, rate limits and ingestion runs
+
+Phase 1 groundwork (task 1.0). No real source exists yet; they arrive in tasks 1.1 to 1.7.
+
+- **One interface** (`market_intel.sources.DataSource`): every source has a stable **source
+  tag** and offers some of four kinds of data: instruments, daily candles, intraday candles,
+  news. What it doesn't offer raises `NotSupportedError`. Sources only fetch and return
+  records; they never write to a database.
+- **Source tags:** `upstox`, `yfinance`, `rss:<feed>` (e.g. `rss:et_markets`), and `fake` for
+  tests. Candle tables accept only `upstox` and `yfinance`, so fake candles can never be
+  stored.
+- **Typed records** (`market_intel.sources.records`): `Instrument`, `DailyCandle`,
+  `IntradayCandle` and `NewsRecord` mirror the `instruments`, `candles_daily` and
+  `candles_intraday` tables and the `news_items` collection. A record **can't be built without
+  its source**, and values follow the tables' rules (price precision, OHLC ranges, volume,
+  timezone-aware times, raw or adjusted prices), so a bad row fails before it reaches the
+  database. `FakeSource` (`market_intel.sources.fake`) works end to end in tests.
+- **Rate limiter** (`market_intel.rate_limit`): thread-safe, with several sliding windows at
+  once, configured per source. Upstox defaults are its published per-user limits (50 per
+  second, 500 per minute, 2000 per 30 minutes; `UPSTOX_RATE_*`), of which only a share is used
+  (`UPSTOX_RATE_HEADROOM`, default 0.8 = 40 / 400 / 1600). On HTTP 429 or `Retry-After` it
+  blocks every caller for an exponential delay plus jitter (at least `Retry-After`); a success
+  resets it. The clock is injectable for tests.
+  - **One process calls Upstox.** Upstox counts its limits per user, not per program, and a
+    limiter only knows about its own process. So only **one process may call Upstox at a
+    time**: from task 1.8 that is the scheduler. Running a second Upstox job by hand while the
+    scheduler runs can exceed the limits.
+- **Ingestion runs** (`market_intel.ingestion.ingestion_run`): every data-loading job runs
+  inside this context manager.
+  - On entry it inserts an `ingestion_runs` row (job, source, params, status `running`) with
+    the **app login**, on its own autocommit connection, so the row is visible while the job
+    runs and can still be marked failed if the job's own transaction breaks.
+  - On success: `finished_at`, status `success` and `rows_written` (the job counts rows with
+    `run.add_rows(n)`).
+  - On any error, including Ctrl+C: status `failed`, `finished_at`, the rows counted so far
+    and a **masked** error (`Type: message`, with user names and passwords in URLs and loaded
+    secrets removed, at most 2000 characters; stricter than log masking, which keeps user
+    names); then the exception is re-raised unchanged. Secret-looking params
+    are masked before they're stored.
+  - Health's `data_freshness` check reads the latest row.
 
 ## Health check
 
@@ -438,7 +493,8 @@ Data Health page (no secrets; hosts may appear).
   passwords, then runs `mongo_setup` twice (the second run must change nothing), the
   migrations up, down to base and up again, `alembic check`, the integration tests, `db_check`
   and `health --json` (no FAIL allowed). It runs only when a path in its filter changes:
-  `docker/`, the `db` and `mongo` packages, `db_check.py`, `health.py`, `mongo_setup.py`,
+  `docker/`, the `db` and `mongo` packages, `db_check.py`, `health.py`, `ingestion.py`,
+  `mongo_setup.py`,
   `config.py`, `migrations/`, `alembic.ini`, `tests/integration/`, `pyproject.toml`, `uv.lock`
   and the workflow file.
 - **Docs test** (`tests/test_docs.py`) checks links, the README length, Mermaid blocks and the
@@ -455,6 +511,8 @@ after the current one passes validation.
 ### Phase 1 — Stock data pipeline
 
 Data pipeline: instruments and daily candles, `ingestion_runs`, `data_gaps`, the Upstox token.
+Built as tasks 1.0 to 1.10 (see [progress](progress.md)). The groundwork from 1.0 is described
+in [Data sources, rate limits and ingestion runs](#data-sources-rate-limits-and-ingestion-runs).
 
 ### Phase 2 — Events and features
 
