@@ -274,3 +274,28 @@
 - Decision: Logs hide the whole user part of any URL (user name and password), the same as stored ingestion errors.
 - Concern (planner): None.
 - Reason (owner): Accepted the 1.0 review answer; user names must not appear in output.
+
+## 2026-11-22 - Data collection: legitimate channels only
+- Decision: Data comes only from RSS feeds, official files, APIs and pages the owner captures. The code uses an honest identity and never imitates a browser or works around blocks, CAPTCHAs or logins. Per-company news uses Google News RSS for the watchlist (1.2b), not search-page scraping. Official NSE files (bulk/block deals, bhavcopy delivery %, surveillance lists) are downloaded once a day (1.6b), stopping with an alert if blocked; 1.6 revisits the manual FII/DII import. Moneycontrol is excluded because it blocks non-browser clients.
+- Concern (planner): Using a blocked source rarely doesn't change its terms. Publishers' RSS terms usually allow personal, non-commercial use with a link back; ours is stored locally and never republished. Official files can change format or start blocking, so source-health alerts are required.
+- Reason (owner): Wider coverage of every factor that moves prices, collected safely.
+
+## 2026-11-22 - News and exchange feeds
+- Decision: 11 RSS feeds (6 news, 5 official NSE/BSE) are fetched politely (at most once per 10 minutes per feed, conditional requests, size limits) into news_items: headline, summary and link only. Each item stores published_at, fetched_at and available_at (the later of the two), and Phase 2 features use available_at. Exchange items are linked to instruments only on a clear match. A run is success, partial or failed. A reusable source-health monitor emails when a source fails three times in a row, returns nothing, returns mostly malformed items, drops far below its usual volume, or loses its publish times.
+- Concern (planner): Feeds change without notice; health alerts catch it, but fixing a parser remains a manual task.
+- Reason (owner): Every broken source must be reported by email so the code can be fixed.
+
+## 2026-11-22 - Phase 2 additions: local LLM and page capture
+- Decision: A local LLM (Ollama, small models on the 4 GB GPU) is the first choice for extraction, then the Gemini/Groq free tiers; the paid cap is unchanged, and accuracy is measured before trusting any model. Filing PDFs are read with OCR when needed. Page capture for crucial decisions has two features: (1) automatic browser capture to PDF only for pages that allow automated access (robots and terms respected), stopping at any block; (2) evidence requests, where the system lists exact URLs (checked automatically where allowed, and marked valid or invalid by the owner on screen), the owner saves the pages as PDF, and the system takes them from an upload/file picker or from the Downloads folder (only new PDFs saved after an open request, and only after the owner confirms the match). The capture time counts as available_at.
+- Concern (planner): Small local models are less accurate than large ones; captured pages stay on the laptop for personal use and are never committed or shared.
+- Reason (owner): Free, private, and a full picture before crucial decisions.
+
+## 2026-11-22 - Intraday design
+- Decision: Intraday uses a fast numeric path: a small model (e.g. LightGBM) on 1-minute features (price, volume, order-book imbalance, market and sector moves, VIX, time of day, the latest background news score) with millisecond inference and no LLM in the live decision. Labels use the triple-barrier method (target, stop-loss or time limit, whichever comes first). Every signal is a full trade plan (entry, target, stop-loss, exit time, quantity, maximum loss, probability, expected gain after all costs) and is "no trade" unless the expected gain after costs is positive. Fixed risk per trade, a daily loss limit and a maximum number of trades. 15 minutes is the main horizon; 5 minutes is an experiment. The objective is maximum profit after costs with capped loss; nothing is guaranteed. Order-book depth is recorded from 1.7 because no history exists.
+- Concern (planner): SEBI's study found 71% of individual intraday traders in the cash segment lost money in FY2023, and costs add heavily to losses; very short horizons are dominated by noise and charges. Everything is paper-traded first, and promotion needs the owner's approval.
+- Reason (owner): Intraday needs fast decisions on a laptop, and clear "invest this, aim for this, risk at most this" plans.
+
+## 2026-11-22 - Factor map, manipulation flags and expert ideas
+- Decision: docs/factors.md lists the factors that move prices, their sources and when each is built; contributions are measured per sector and stock with SHAP, not assumed. Phase 5 adds manipulation risk flags (pump and dump, wash trading, operator-led rises, spoofing) learned from exchange surveillance lists and SEBI enforcement orders, used only to avoid or down-weight stocks. Expert trading ideas are hypotheses, tested walk-forward after costs with a final untouched test period.
+- Concern (planner): Testing many ideas makes some look good by luck; joining or riding a suspected pump can breach SEBI's rules on fraudulent and unfair trade practices.
+- Reason (owner): Use every useful signal, learn from experienced traders' ideas, and protect against fake demand and supply.
