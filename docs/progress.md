@@ -5,8 +5,8 @@ Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
 
 ## Current
 
-- Phase 1 (stock data pipeline). Now: 1.2 (news and exchange feeds) done, awaiting planner
-  review. Next: 1.2b (per-company news). 0.11 (remove the testing-laptop dependency) stays planned
+- Phase 1 (stock data pipeline). Now: 1.2b (per-company news, BSE codes, exchange item
+  identity, 14-day silence warning) in progress. 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -32,6 +32,14 @@ Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- 1.2 review (planner, 2026-11-22): passed. Verified in the databases: timing fields
+  consistent (0 items with `available_at` before `published_at` or `fetched_at`); all 17
+  exchange matches correct (the 3 unmatched look like SME or suspended companies); only the
+  approved test line added and the standing rule is in CLAUDE.md; decisions untouched; no
+  tracked data; no browser imitation. Answers: (1) the narrower "empty" rule b is OK; add rule
+  f (an enabled source with 0 items in every content fetch for 14 days -> WARN); (2) repeated
+  links in exchange feeds are different events: store them separately (1.2b part A); (3)
+  exchange times without a zone are IST: confirmed.
 - 1.1 review (planner, 2026-11-22): passed. Verified as mi_app: counts by series, ISINs
   present, tick sizes 0.01 to 5.00, watchlist 0 rows, run history (one real refresh, one
   refused safety-valve run, two no-op runs), health OK; only the approved 4 masking strings
@@ -112,8 +120,8 @@ Last updated: 2026-11-22, HEAD 8317a95. Updated at the end of every task (see
 | 0.11 | planned (not before 2026-12-03) | – | Remove testing-laptop dependency (hand-back checklist, cloud databases per the 0.10 decision, two-laptop docs) |
 | 1.0 | done 2026-11-21 (HEAD 3938cd5) | passed (planner, 2026-11-22) | Groundwork: one log file per component; background alerts with a bounded exit flush and a locked throttle; `market_intel.sources` interface, typed records and a fake source; multi-window rate limiter with Upstox defaults and 429 back-off; `ingestion_run` helper |
 | 1.1 | done 2026-11-22 (HEAD c31dfe5) | passed (planner, 2026-11-22) | Instruments from Upstox's public NSE file (EQ, BE, indices) with conditional GET, size caps, safety valve and symbol history; sector import from the Nifty 500 list CSV; watchlist (max 50, database only); migration 0004; strict URL masking in logs; cloud MongoDB access decision logged |
-| 1.2 | done 2026-11-22 (HEAD 8317a95) | awaiting planner review | 11 RSS feeds (6 news, 5 NSE/BSE) into `news_items` with `available_at`, dedupe and clear-match symbols; reusable source-health alerts and the `sources` health check; `partial` run status; factor map; spec, plan and five decisions |
-| 1.2b | next | – | Per-company news (Google News RSS for the watchlist) |
+| 1.2 | done 2026-11-22 (HEAD 8317a95) | passed (planner, 2026-11-22) | 11 RSS feeds (6 news, 5 NSE/BSE) into `news_items` with `available_at`, dedupe and clear-match symbols; reusable source-health alerts and the `sources` health check; `partial` run status; factor map; spec, plan and five decisions |
+| 1.2b | in progress | – | Per-company news (Google News RSS), BSE codes, exchange item identity, 14-day silence warning |
 | 1.3 | planned | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
