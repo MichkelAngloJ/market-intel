@@ -299,3 +299,13 @@
 - Decision: docs/factors.md lists the factors that move prices, their sources and when each is built; contributions are measured per sector and stock with SHAP, not assumed. Phase 5 adds manipulation risk flags (pump and dump, wash trading, operator-led rises, spoofing) learned from exchange surveillance lists and SEBI enforcement orders, used only to avoid or down-weight stocks. Expert trading ideas are hypotheses, tested walk-forward after costs with a final untouched test period.
 - Concern (planner): Testing many ideas makes some look good by luck; joining or riding a suspected pump can breach SEBI's rules on fraudulent and unfair trade practices.
 - Reason (owner): Use every useful signal, learn from experienced traders' ideas, and protect against fake demand and supply.
+
+## 2026-11-22 - Per-company news through Google News RSS
+- Decision: company-fetch reads Google News RSS search feeds for every watchlist stock plus up to 30 recent filers (companies with matched exchange items in the last 24 hours), one request per 10 seconds, each company at most once an hour. Any block (403/429/503, an HTML page, or a consent or CAPTCHA redirect) stops all Google requests until the next IST day and sends one alert. Items are stored as company_news with the target symbol; a shared article gains extra symbols; match_confidence is low for one-word names or when the name isn't in the title or summary.
+- Concern (planner): Google can block or change this feed at any time; it stays a best-effort source. Short names produce false matches, so Phase 2 checks low-confidence items. Articles aren't opened, so only headlines and summaries are kept.
+- Reason (owner): Track each company's news, including companies that are filing today, not only the general market feeds.
+
+## 2026-11-22 - Exchange item identity and BSE codes
+- Decision: Exchange items are keyed by their own identity (the feed guid, or link + title + time), so filings that share one PDF are kept as separate events; existing items were migrated once. Instruments carry the BSE scrip code from Upstox's public BSE file (matched by ISIN), so BSE filings link to stocks exactly. A source with no items for 14 days raises a warning.
+- Concern (planner): Some exchange feeds have no stable guid, so title + time stands in; a corrected filing may then appear as a second item.
+- Reason (owner): Insider and promoter filings are separate events that matter as features.
