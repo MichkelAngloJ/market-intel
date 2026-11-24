@@ -5,9 +5,16 @@ Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
 
 ## Current
 
-- Phase 1 (stock data pipeline). Now: 1.2b (per-company news, BSE codes, exchange item
-  identity, 14-day silence warning) done, awaiting planner review. Next: 1.3 (Upstox login
-  and token). 0.11 (remove the testing-laptop dependency) stays planned
+- Sprint (owner-confirmed 2026-11-24): an end-to-end thin slice by 27 Nov (demo 28 Nov):
+  S1 Upstox login + daily candles; S2 features + labels + leakage test; S3 baselines +
+  per-sector LightGBM (pooled fallback), walk-forward after costs, SHAP, MLflow; S4
+  predictions + audit + outcomes + paper trading (with a historical simulation); S5 FastAPI +
+  Streamlit (Today's signals, Stock detail, Paper trading, Audit, Data health); S6 scheduler
+  + end-to-end CI test + docs + tag e2e-v0. Deferred after 28 Nov: 1.5 intraday, 1.6 macro
+  extras, 1.6b NSE files, 1.7 live feed + depth, 1.9 MCP, Phase 2 AI extraction
+  (Ollama/FinBERT/OCR/page capture), LSTM, online learning, manipulation flags, IPO, mutual
+  funds, agent.
+- Now: S1 (Upstox login + daily candles) in progress. 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -33,6 +40,9 @@ Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- 1.2b review (planner, 2026-11-22): passed. Verified: DB at 0005, 2755 `bse_code`s, news
+  207/20/84, only the approved enum line edited. Answers: (1) keep the strict clean-name rule
+  (Phase 2 checks low matches); (2) re-match old exchange items by BSE code (S1 part E).
 - 1.2 review (planner, 2026-11-22): passed. Verified in the databases: timing fields
   consistent (0 items with `available_at` before `published_at` or `fetched_at`); all 17
   exchange matches correct (the 3 unmatched look like SME or suspended companies); only the
@@ -122,8 +132,9 @@ Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
 | 1.0 | done 2026-11-21 (HEAD 3938cd5) | passed (planner, 2026-11-22) | Groundwork: one log file per component; background alerts with a bounded exit flush and a locked throttle; `market_intel.sources` interface, typed records and a fake source; multi-window rate limiter with Upstox defaults and 429 back-off; `ingestion_run` helper |
 | 1.1 | done 2026-11-22 (HEAD c31dfe5) | passed (planner, 2026-11-22) | Instruments from Upstox's public NSE file (EQ, BE, indices) with conditional GET, size caps, safety valve and symbol history; sector import from the Nifty 500 list CSV; watchlist (max 50, database only); migration 0004; strict URL masking in logs; cloud MongoDB access decision logged |
 | 1.2 | done 2026-11-22 (HEAD 8317a95) | passed (planner, 2026-11-22) | 11 RSS feeds (6 news, 5 NSE/BSE) into `news_items` with `available_at`, dedupe and clear-match symbols; reusable source-health alerts and the `sources` health check; `partial` run status; factor map; spec, plan and five decisions |
-| 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | awaiting planner review | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
-| 1.3 | next | – | Upstox login and token |
+| 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | passed (planner, 2026-11-22) | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
+| S1 | in progress | – | Upstox login + daily candles (sprint task 1 of 6; deadline 27 Nov) |
+| 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
 | 1.6 | planned | – | Macro |
