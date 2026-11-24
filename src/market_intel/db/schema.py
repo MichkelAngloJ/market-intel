@@ -241,3 +241,32 @@ llm_spend = Table(
 # Views are not tracked by autogenerate; migration 0001 creates this one with op.execute.
 # Months are IST calendar months, matching the Rs 1,000/month LLM cap.
 V_LLM_SPEND_MONTHLY = "v_llm_spend_monthly"
+
+
+# Which instruments belong to a named universe (0006). "nifty500" is set by the sector import
+# from the Nifty 500 list (as_of = the import date, IST). Today's members only: using them for
+# history adds survivorship bias (stated in model cards).
+UNIVERSES = ("nifty500",)
+universe_members = Table(
+    "universe_members",
+    metadata,
+    Column("universe", Text, nullable=False),
+    Column("instrument_id", BigInteger, ForeignKey("instruments.id"), nullable=False),
+    Column("as_of", Date, nullable=False),
+    PrimaryKeyConstraint("universe", "instrument_id"),
+)
+
+# Price events found in the candles (0006). Recorded, never used to change prices; S2 excludes
+# these days from labels.
+PRICE_EVENT_KINDS = ("suspected_split_bonus",)
+price_events = Table(
+    "price_events",
+    metadata,
+    Column("instrument_id", BigInteger, ForeignKey("instruments.id"), nullable=False),
+    Column("trade_date", Date, nullable=False),  # the first day at the new price level (IST)
+    Column("kind", Text, nullable=False),
+    Column("ratio", Numeric(12, 6), nullable=False),  # close / previous close
+    Column("detected_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    PrimaryKeyConstraint("instrument_id", "trade_date", "kind"),
+    CheckConstraint(_in("kind", PRICE_EVENT_KINDS), name="kind"),
+)
