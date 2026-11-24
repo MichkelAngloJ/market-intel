@@ -18,6 +18,9 @@ on:
       - "src/market_intel/rate_limit.py"
       - "src/market_intel/candles.py"
       - "src/market_intel/upstox.py"
+      - "src/market_intel/features.py"
+      - "src/market_intel/feature_spec.py"
+      - "scripts/fake_market_data.py"
       - "config/news_feeds.toml"
       - "src/market_intel/sources/**"
       - "src/market_intel/mongo/**"
@@ -44,6 +47,9 @@ on:
       - "src/market_intel/rate_limit.py"
       - "src/market_intel/candles.py"
       - "src/market_intel/upstox.py"
+      - "src/market_intel/features.py"
+      - "src/market_intel/feature_spec.py"
+      - "scripts/fake_market_data.py"
       - "config/news_feeds.toml"
       - "src/market_intel/sources/**"
       - "src/market_intel/mongo/**"
@@ -155,6 +161,17 @@ jobs:
           uv run python -m market_intel.instruments refresh --file "$RUNNER_TEMP/fake.json.gz"
           uv run python -m market_intel.instruments refresh --file "$RUNNER_TEMP/fake.json.gz" | tee refresh_2.txt
           grep -q "instruments refresh: 0 changes" refresh_2.txt
+
+      # Features v1, labels and the leakage test on SYNTHETIC candles (the script refuses a
+      # database that already holds candles). check-leakage fails the job if leakage is found.
+      - name: Features, labels and leakage test on fake data
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          uv run python scripts/fake_market_data.py
+          uv run python -m market_intel.features build
+          uv run python -m market_intel.features labels
+          uv run python -m market_intel.features check-leakage --sample 40
 
       - name: Database check
         env:
