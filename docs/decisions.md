@@ -324,3 +324,13 @@
 - Decision: Daily candles come from the Upstox V3 historical API with yfinance as a stock-only backup (each row tagged; Upstox replaces yfinance for the same day, never the reverse). Gaps are tracked against an index-derived trading calendar and backfilled resumably. The sprint universe is all NSE indices plus the Nifty 500 from 2015. Suspected split/bonus jumps are recorded, not corrected, and S2 excludes them from labels.
 - Concern (planner): Using today's Nifty 500 for history adds survivorship bias (past losers are missing), so results look better than reality; this must be stated in model cards. Raw prices aren't adjusted for corporate actions.
 - Reason (owner): The fastest reliable data base for an end-to-end demo.
+
+## 2026-11-24 - Timing convention, features v1 and labels
+- Decision: Features for day t use only candles up to t's close; predictions are made at 08:30 IST on the next trading day and enter at its open; news counts only if available before that time. Features v1 (returns, volatility, trend, RSI, volume, 52-week position, gap, strength vs Nifty and sector, market and VIX, calendar, history and price-event flags) live in features_daily; labels (forward return from the next open to the close h trading days later, h = 21, 63, 126, plus up/down) live in a separate labels_daily table and are excluded around split/bonus events, gaps and special sessions. News features are stored but not used for training until enough history exists.
+- Concern (planner): Survivorship bias from today's Nifty 500 and unadjusted prices remain; both must be stated in model cards.
+- Reason (owner): Leakage-safe inputs for honest models.
+
+## 2026-11-24 - Leakage test fails the build
+- Decision: An automated leakage test (truncating future data, adding late news, a label-name check, and a deliberately leaky fake feature that must be caught) runs in CI and as a command on real data; any failure stops the build.
+- Concern (planner): Tests can only catch the leakage patterns they check; every new feature must keep using the shared build function.
+- Reason (owner): The spec requires a leakage test that fails the build.
