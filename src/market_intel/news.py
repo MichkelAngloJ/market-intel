@@ -882,6 +882,54 @@ def _maybe_collection(settings: Settings, given: Any | None, dry_run: bool):
         yield coll
 
 
+# --- rematch-exchange --------------------------------------------------------------------
+
+
+@dataclass
+class RematchSummary:
+    changed: int = 0
+    unchanged: int = 0
+    matched: int = 0
+    ambiguous: int = 0
+    unmatched: int = 0
+    dry_run: bool = False
+
+    def lines(self) -> list[str]:
+        prefix = "DRY RUN (nothing saved): " if self.dry_run else ""
+        return [
+            f"{prefix}exchange items re-matched: changed {self.changed}, unchanged"
+            f" {self.unchanged}; now matched {self.matched}, ambiguous {self.ambiguous},"
+            f" unmatched {self.unmatched}"
+        ]
+
+
+def rematch_exchange(
+    collection: Any,
+    index: InstrumentIndex,
+    *,
+    dry_run: bool = False,
+    only: dict[str, Any] | None = None,
+) -> RematchSummary:
+    """Set exchange items' ``symbols`` again by BSE code, then by name (the 1.2 rules); only
+    ``symbols`` changes, and only where the new match differs."""
+    summary = RematchSummary(dry_run=dry_run)
+    docs = collection.find({"kind": "exchange", **(only or {})}, {"symbols": 1, "exchange_meta": 1})
+    for doc in docs:
+        meta = doc.get("exchange_meta") or {}
+        symbols, outcome = index.match(
+            meta.get("exchange") or "", meta.get("company_raw"), meta.get("symbol_raw")
+        )
+        setattr(summary, outcome, getattr(summary, outcome) + 1)
+        if list(doc.get("symbols") or []) == symbols:
+            summary.unchanged += 1
+            continue
+        summary.changed += 1
+        if not dry_run:
+            collection.update_one({"_id": doc["_id"]}, {"$set": {"symbols": symbols}})
+    log.info("exchange_rematched", dry_run=dry_run, changed=summary.changed)
+    return summary
+
+
 # --- status ------------------------------------------------------------------------------
 
 
@@ -945,6 +993,10 @@ def build_parser() -> argparse.ArgumentParser:
         "migrate-exchange-keys", help="recompute the item keys of stored exchange items"
     )
     migrate_p.add_argument("--dry-run", action="store_true", help="count only, save nothing")
+    rematch_p = sub.add_parser(
+        "rematch-exchange", help="match stored exchange items again (BSE code, then name)"
+    )
+    rematch_p.add_argument("--dry-run", action="store_true", help="count only, save nothing")
     company_p = sub.add_parser(
         "company-fetch", help="per-company news from Google News RSS (watchlist + recent filers)"
     )
@@ -979,6 +1031,10 @@ def main(argv: list[str] | None = None) -> int:
                     settings, symbol=args.symbol, force=args.force, dry_run=args.dry_run
                 )
                 print("\n".join(company.lines()))
+            elif args.command == "rematch-exchange":
+                with _collection(settings, None) as coll:
+                    result = rematch_exchange(coll, load_index(settings), dry_run=args.dry_run)
+                print("\n".join(result.lines()))
             elif args.command == "migrate-exchange-keys":
                 print("\n".join(run_migrate(settings, dry_run=args.dry_run).lines()))
             else:

@@ -609,6 +609,7 @@ def read_sector_csv(path: Path) -> list[SectorRow]:
 @dataclass
 class SectorPlan:
     updates: list[tuple[str, int]] = field(default_factory=list)  # sector, instrument id
+    matched_ids: list[int] = field(default_factory=list)  # the Nifty 500 universe
     matched: int = 0
     unchanged: int = 0
     unmatched: int = 0
@@ -620,6 +621,7 @@ class SectorPlan:
             f"{prefix}sector import: matched {self.matched}, unmatched {self.unmatched}",
             f"  sectors set or changed {len(self.updates)}, unchanged {self.unchanged},"
             f" empty industry skipped {self.empty}",
+            f"  universe nifty500: {len(self.matched_ids)} members",
         ]
 
 
@@ -645,6 +647,8 @@ def plan_sectors(
             continue
         plan.matched += 1
         row_id, current = hit
+        if row_id not in plan.matched_ids:
+            plan.matched_ids.append(row_id)
         if not row.industry:
             plan.empty += 1
         elif current == row.industry or row_id in seen:
@@ -674,6 +678,14 @@ def run_import_sectors(
                         cur.executemany(
                             "UPDATE instruments SET sector = %s WHERE id = %s", plan.updates
                         )
+                # The matched stocks are the "nifty500" universe as of today (IST); one
+                # statement each, so the list is replaced as a whole.
+                conn.execute("DELETE FROM universe_members WHERE universe = 'nifty500'")
+                conn.execute(
+                    "INSERT INTO universe_members (universe, instrument_id, as_of)"
+                    " SELECT 'nifty500', unnest(%s::bigint[]), %s",
+                    (plan.matched_ids, ist_today()),
+                )
                 if dry_run:
                     raise psycopg.Rollback()
         except psycopg.Rollback:
