@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
+Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -14,8 +14,8 @@ Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
   extras, 1.6b NSE files, 1.7 live feed + depth, 1.9 MCP, Phase 2 AI extraction
   (Ollama/FinBERT/OCR/page capture), LSTM, online learning, manipulation flags, IPO, mutual
   funds, agent.
-- Now: S3 (baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow) in
-  progress. 0.11 (remove the testing-laptop dependency) stays planned
+- Now: S3 (baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow) done,
+  awaiting planner review. Next: S4 (predictions + audit + outcomes + paper trading). 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -151,7 +151,7 @@ Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
 | 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | passed (planner, 2026-11-22) | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
 | S1 | done 2026-11-24 (HEAD 3e1262f) | passed (planner, 2026-11-24) | Upstox browser login (token in Windows Credential Manager), status and health check; V3 daily candles with an honest-session yfinance backup; loader with precedence, gaps, resume and split/bonus flags; migration 0006 (universe members, price events); nifty500 universe; exchange rematch |
 | S2 | done 2026-11-24 (HEAD e91fb33) | passed (planner, 2026-11-24) | Timing convention; features v1 (32, news not for training) and separate forward labels (21/63/126 days, exclusion reasons) with migration 0007; leakage test (truncation, late news, label names, shifted data) in CI and on real data; special sessions out of the gap and label calendar; BHARATBOND out of indices; yfinance curl-cffi off |
-| S3 | in progress | – | Baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow |
+| S3 | done 2026-11-25 (HEAD c472d0a) | awaiting planner review | Baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -172,6 +172,16 @@ Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S3 (2026-11-25): local databases at 0008. Real training (7.5 min): 17 sector models +
+  1 pooled (Diversified, Media, Textiles); 11 thin stocks excluded; folds 2018-2026, holdout
+  from 2026-04-24. Walk-forward AUC 0.526 (baselines 0.500-0.501). Walk-forward portfolio
+  after costs, annual: model 11.2%, equal-weight universe 17.8%, SMA rule 17.4%, momentum
+  15.5%, Nifty 50 9.4%: the model does NOT beat the baselines. Holdout: model -32.1%,
+  equal-weight -12.6%, SMA +17.9%, momentum +11.0%, Nifty -10.0%: NO. 6 of 17 sector
+  models beat their own sector baselines on the walk-forward. The first run (v1) used a
+  ratio correction for split/bonus windows that produced impossible returns; its 18 rows are
+  `retired`; the corrected v2 rows are the 18 `candidate`s. Unmeasurable candidate
+  stock-periods: 100 of 37,811 (0.3%). MLflow experiment `market-intel-21d`: 38 runs.
 - S2 (2026-11-24): local databases at 0007. Step 0: 2 special sessions (2015-02-28,
   2016-10-30); 618 gap rows on them deleted (a second run: 0); the `indices` universe is 135
   (BHARATBOND out). Features v1 for 497 stocks: 1,150,515 rows in 176 s (11 stocks under 252
@@ -212,9 +222,9 @@ Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
   databases and leave no rows (the instrument tests run in a transaction that is rolled back).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
-- CI (run 45446937980) and compose-smoke (run 45446937958) green at 5806062, the last S2
-  code commit (0007 up, down and up; no drift; 47 integration tests; features, labels and
-  check-leakage PASS on synthetic data). The final commit's CI result is in the S2 report.
+- CI (run 45494974004) and compose-smoke (run 45494973966) green at c472d0a, the last S3
+  code commit (0008 up, down and up; no drift; 49 integration tests; models train and report
+  on synthetic data). The final commit's CI result is in the S3 report.
 
 ## Carry-forward items
 
@@ -239,10 +249,14 @@ Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
 - Daily: the owner runs `upstox login` each morning (token ends 03:30 IST); candles after
   18:00 IST. Today's candle wasn't published by Upstox at 22:00 IST on 24 Nov (last stored
   day 23 Nov); the next incremental run picks it up.
-- S3: train only on `TRAINING_FEATURES` (news counts are not for training); filter or warn
-  on `history_days` < 252; state survivorship bias (today's Nifty 500) and unadjusted raw
-  prices in model cards; % up rises with the horizon (59.3% at 126 days), so baselines must
-  include 'always up' / buy-and-hold.
+- S4: the models don't beat the baselines after costs; nothing may become `active`. Paper
+  trading may run on the candidates to collect outcomes, clearly labelled as such.
+- Price events: the split/bonus detector records only falling ratios and some events are
+  not real splits (e.g. several 0.5 'events' within weeks); consolidations go undetected.
+  An adjusted-price series (or a corporate-actions source) would make labels and returns
+  more reliable.
+- Dependencies: python-dateutil is 2.9.0.post0 (mlflow's graphene pins <3; owner-approved
+  2026-11-25).
 - yfinance by default impersonates a browser (curl_cffi); the project always passes an
   honest `requests` session. Yahoo served it on 24 Nov; if Yahoo starts refusing, the
   backup stops after 5 failures per run and source health reports it.
