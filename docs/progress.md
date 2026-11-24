@@ -14,8 +14,8 @@ Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
   extras, 1.6b NSE files, 1.7 live feed + depth, 1.9 MCP, Phase 2 AI extraction
   (Ollama/FinBERT/OCR/page capture), LSTM, online learning, manipulation flags, IPO, mutual
   funds, agent.
-- Now: S2 (features v1, labels, leakage test) done, awaiting planner review. Next: S3
-  (baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow). 0.11 (remove the testing-laptop dependency) stays planned
+- Now: S3 (baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow) in
+  progress. 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -41,6 +41,12 @@ Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- S2 review (planner, 2026-11-24): passed. Verified: DB 0007; 5 random 21-day labels
+  recomputed from raw candles all match; the leakage test catches all 6 leaky fakes and
+  passes on 500 real samples; 0 old test lines changed. Answers: (1) include "always up"
+  explicitly; the real bar: the model's top picks must beat an equal-weight hold of the whole
+  universe after costs; (2) stocks with fewer than 252 history days are excluded from
+  training; they may get predictions later, flagged "thin data".
 - S1 review (planner, 2026-11-24): passed. Verified: DB 0006; 1,389,440 candles 2015-01-01 to
   2026-11-23 (upstox 1,388,415, yfinance 1,025, all raw); 0 OHLC violations; 632 instruments;
   nifty500 = 497 with sectors; 1840 unfillable gaps; 156 price events in 92 stocks; no tokens
@@ -144,8 +150,8 @@ Last updated: 2026-11-24, HEAD e91fb33. Updated at the end of every task (see
 | 1.2 | done 2026-11-22 (HEAD 8317a95) | passed (planner, 2026-11-22) | 11 RSS feeds (6 news, 5 NSE/BSE) into `news_items` with `available_at`, dedupe and clear-match symbols; reusable source-health alerts and the `sources` health check; `partial` run status; factor map; spec, plan and five decisions |
 | 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | passed (planner, 2026-11-22) | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
 | S1 | done 2026-11-24 (HEAD 3e1262f) | passed (planner, 2026-11-24) | Upstox browser login (token in Windows Credential Manager), status and health check; V3 daily candles with an honest-session yfinance backup; loader with precedence, gaps, resume and split/bonus flags; migration 0006 (universe members, price events); nifty500 universe; exchange rematch |
-| S2 | done 2026-11-24 (HEAD e91fb33) | awaiting planner review | Timing convention; features v1 (32, news not for training) and separate forward labels (21/63/126 days, exclusion reasons) with migration 0007; leakage test (truncation, late news, label names, shifted data) in CI and on real data; special sessions out of the gap and label calendar; BHARATBOND out of indices; yfinance curl-cffi off |
-| S3 | next | – | Baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow |
+| S2 | done 2026-11-24 (HEAD e91fb33) | passed (planner, 2026-11-24) | Timing convention; features v1 (32, news not for training) and separate forward labels (21/63/126 days, exclusion reasons) with migration 0007; leakage test (truncation, late news, label names, shifted data) in CI and on real data; special sessions out of the gap and label calendar; BHARATBOND out of indices; yfinance curl-cffi off |
+| S3 | in progress | – | Baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
