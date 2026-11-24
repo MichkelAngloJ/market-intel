@@ -14,8 +14,7 @@ Last updated: 2026-11-24, HEAD 3e1262f. Updated at the end of every task (see
   extras, 1.6b NSE files, 1.7 live feed + depth, 1.9 MCP, Phase 2 AI extraction
   (Ollama/FinBERT/OCR/page capture), LSTM, online learning, manipulation flags, IPO, mutual
   funds, agent.
-- Now: S1 (Upstox login + daily candles) done, awaiting planner review. Next: S2 (features
-  + labels + leakage test). 0.11 (remove the testing-laptop dependency) stays planned
+- Now: S2 (features v1, labels, leakage test) in progress. 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -41,6 +40,15 @@ Last updated: 2026-11-24, HEAD 3e1262f. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- S1 review (planner, 2026-11-24): passed. Verified: DB 0006; 1,389,440 candles 2015-01-01 to
+  2026-11-23 (upstox 1,388,415, yfinance 1,025, all raw); 0 OHLC violations; 632 instruments;
+  nifty500 = 497 with sectors; 1840 unfillable gaps; 156 price events in 92 stocks; no tokens
+  tracked; 0 old test lines changed. Answers: (1) remove the 4 BHARATBOND indices from the
+  indices universe; keep the bond indices' valid rows, but no model or feature uses bond
+  indices; (2) a special session is a day on which fewer than 50% of the nifty500 members with
+  history have a candle (Muhurat, Budget Saturday): excluded from the gap and label calendar,
+  and its gap rows deleted; (3) turn yfinance's curl-cffi off as a second guard if supported,
+  with a test that yfinance uses our own session. All three applied in S2 step 0.
 - 1.2b review (planner, 2026-11-22): passed. Verified: DB at 0005, 2755 `bse_code`s, news
   207/20/84, only the approved enum line edited. Answers: (1) keep the strict clean-name rule
   (Phase 2 checks low matches); (2) re-match old exchange items by BSE code (S1 part E).
@@ -134,8 +142,8 @@ Last updated: 2026-11-24, HEAD 3e1262f. Updated at the end of every task (see
 | 1.1 | done 2026-11-22 (HEAD c31dfe5) | passed (planner, 2026-11-22) | Instruments from Upstox's public NSE file (EQ, BE, indices) with conditional GET, size caps, safety valve and symbol history; sector import from the Nifty 500 list CSV; watchlist (max 50, database only); migration 0004; strict URL masking in logs; cloud MongoDB access decision logged |
 | 1.2 | done 2026-11-22 (HEAD 8317a95) | passed (planner, 2026-11-22) | 11 RSS feeds (6 news, 5 NSE/BSE) into `news_items` with `available_at`, dedupe and clear-match symbols; reusable source-health alerts and the `sources` health check; `partial` run status; factor map; spec, plan and five decisions |
 | 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | passed (planner, 2026-11-22) | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
-| S1 | done 2026-11-24 (HEAD 3e1262f) | awaiting planner review | Upstox browser login (token in Windows Credential Manager), status and health check; V3 daily candles with an honest-session yfinance backup; loader with precedence, gaps, resume and split/bonus flags; migration 0006 (universe members, price events); nifty500 universe; exchange rematch |
-| S2 | next | – | Features + labels + leakage test |
+| S1 | done 2026-11-24 (HEAD 3e1262f) | passed (planner, 2026-11-24) | Upstox browser login (token in Windows Credential Manager), status and health check; V3 daily candles with an honest-session yfinance backup; loader with precedence, gaps, resume and split/bonus flags; migration 0006 (universe members, price events); nifty500 universe; exchange rematch |
+| S2 | in progress | – | Features v1, labels, leakage test |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
