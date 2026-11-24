@@ -637,7 +637,12 @@ logs to `logs/upstox.jsonl`) and `market_intel.candles daily` (`logs/candles.jso
   `GET /v3/historical-candle/{instrument_key}/days/1/{to}/{from}` (dates inclusive, at most one
   decade per request, so ranges are split into 9-year chunks). Candles are
   `[timestamp (+05:30), open, high, low, close, volume, oi]`; the IST date is the trade date.
-  Records: `source = "upstox"`, `price_basis = "raw"`.
+  Records: `source = "upstox"`, `price_basis = "raw"`. Seen in the first backfill
+  (2026-11-24): for many indices Upstox returns a 2017-2018 day twice (a 00:00 and a 09:15 or
+  17:30 candle); the 00:00 candle is kept and the rest are counted as duplicates. Rows that break
+  the OHLC range (mostly government-bond indices) are skipped and their days stay as gaps. An
+  instrument Upstox rejects as an invalid key (`UDAPI1021`, `UDAPI100011`; e.g. the BHARATBOND
+  indices) is reported as "not served by Upstox", not as a failure.
 - **yfinance backup** (stocks only, `<SYMBOL>.NS`): used only when Upstox fails for an
   instrument and range, or no valid token exists; `auto_adjust=False` (raw prices), `end`
   exclusive. yfinance normally impersonates a browser; this project always passes its own
