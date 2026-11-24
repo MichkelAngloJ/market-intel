@@ -48,6 +48,7 @@ class CandleBatch:
     candles: list[DailyCandle] = field(default_factory=list)
     malformed: int = 0
     requests: int = 0
+    duplicates: int = 0  # extra candles for a day that already had one (Upstox, 2017-2018)
 
 
 def _price(value: Any) -> Decimal:
@@ -78,32 +79,45 @@ def date_chunks(start: date, end: date, days: int = CHUNK_DAYS) -> Iterator[tupl
 
 
 def parse_upstox(payload: Any, symbol: str) -> CandleBatch:
-    """Parse one V3 response into raw daily candles (invalid rows counted, not raised)."""
+    """Parse one V3 response into raw daily candles (invalid rows counted, not raised).
+
+    Upstox sometimes returns a day twice (seen 2026-11-24 for many indices in 2017-2018: one
+    candle stamped 00:00 and one stamped 09:15 or 17:30). The 00:00 candle, the documented daily
+    format, is kept; the others are counted as duplicates."""
     batch = CandleBatch()
     if not isinstance(payload, dict) or payload.get("status") != "success":
         raise CandleSourceError("unexpected Upstox response (status is not success)")
     rows = (payload.get("data") or {}).get("candles")
     if not isinstance(rows, list):
         raise CandleSourceError("unexpected Upstox response (no candles list)")
+    chosen: dict[date, tuple[DailyCandle, bool]] = {}
     for row in rows:
         try:
             ts, o, h, low, c, v = row[0], row[1], row[2], row[3], row[4], row[5]
-            trade_date = datetime.fromisoformat(ts).date()  # the +05:30 local (IST) date
-            batch.candles.append(
-                DailyCandle(
-                    source="upstox",
-                    symbol=symbol,
-                    trade_date=trade_date,
-                    open=_price(o),
-                    high=_price(h),
-                    low=_price(low),
-                    close=_price(c),
-                    volume=_volume(v),
-                    price_basis="raw",
-                )
+            stamp = datetime.fromisoformat(ts)
+            trade_date = stamp.date()  # the +05:30 local (IST) date
+            midnight = stamp.time() == datetime.min.time()
+            candle = DailyCandle(
+                source="upstox",
+                symbol=symbol,
+                trade_date=trade_date,
+                open=_price(o),
+                high=_price(h),
+                low=_price(low),
+                close=_price(c),
+                volume=_volume(v),
+                price_basis="raw",
             )
         except (ValidationError, ValueError, TypeError, IndexError):
             batch.malformed += 1
+            continue
+        previous = chosen.get(trade_date)
+        if previous is not None:
+            batch.duplicates += 1
+            if previous[1] or not midnight:
+                continue  # keep the 00:00 candle, else the first one
+        chosen[trade_date] = (candle, midnight)
+    batch.candles = [chosen[d][0] for d in sorted(chosen)]
     return batch
 
 
@@ -121,6 +135,7 @@ def fetch_upstox(
         part = parse_upstox(payload, symbol)
         out.candles += part.candles
         out.malformed += part.malformed
+        out.duplicates += part.duplicates
         out.requests += 1
     out.candles.sort(key=lambda c: c.trade_date)
     return out

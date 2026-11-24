@@ -75,6 +75,9 @@ SPLIT_TOLERANCE = Decimal("0.03")
 MARKET_STILL = Decimal("0.05")
 PROGRESS_NAME = "candles_progress.json"
 UPSTOX_HEALTH, YAHOO_HEALTH = "upstox_candles", "yfinance_candles"
+# Upstox's "invalid instrument key" codes: the instrument isn't served by the historical API
+# (seen 2026-11-24 for the BHARATBOND indices). Reported as unsupported, not as a failure.
+UNSUPPORTED_CODES = ("UDAPI1021", "UDAPI100011")
 YAHOO_GIVE_UP = 5
 
 log = get_logger("market_intel.candles")
@@ -387,7 +390,9 @@ class InstResult:
     tried: set[str] = field(default_factory=set)
     failed_sources: set[str] = field(default_factory=set)
     error: str | None = None
+    unsupported: bool = False
     malformed: int = 0
+    duplicates: int = 0
     events: int = 0
 
 
@@ -401,6 +406,8 @@ class DailySummary:
     done: int = 0
     resumed: int = 0
     failed: int = 0
+    unsupported: int = 0
+    duplicates: int = 0
     rows: int = 0
     by_source: Counter[str] = field(default_factory=Counter)
     requests: Counter[str] = field(default_factory=Counter)
@@ -418,11 +425,12 @@ class DailySummary:
         return [
             f"{prefix}daily candles ({self.universe}): {self.status}; instruments"
             f" {self.instruments} (done {self.done}, already done {self.resumed},"
-            f" failed {self.failed}); rows {self.rows}",
+            f" not served by Upstox {self.unsupported}, failed {self.failed}); rows {self.rows}",
             f"  requests: upstox {self.requests['upstox']}, yfinance {self.requests['yfinance']};"
             f" duration {self.seconds:.0f} s; Upstox token {self.token}",
             f"  rows by source: upstox {self.by_source['upstox']},"
-            f" yfinance {self.by_source['yfinance']}; malformed skipped {self.malformed}",
+            f" yfinance {self.by_source['yfinance']}; malformed skipped {self.malformed},"
+            f" duplicate days dropped {self.duplicates}",
             f"  gaps: open {g.get('open', 0)}, filled {g.get('filled', 0)},"
             f" unfillable {g.get('unfillable', 0)}; price events: new {self.events_new},"
             f" total {self.events_total}",
@@ -463,6 +471,7 @@ class Loader:
                 )
                 res.requests["upstox"] += batch.requests
                 res.malformed += batch.malformed
+                res.duplicates += batch.duplicates
                 return batch.candles
             except upstox.TokenExpired as exc:
                 self.f.upstox = None  # no more Upstox calls in this run
@@ -471,7 +480,10 @@ class Loader:
             except (upstox.UpstoxError, dc.CandleSourceError) as exc:
                 res.requests["upstox"] += 1
                 errors.append(mask_text(str(exc)))
-                res.failed_sources.add("upstox")
+                if any(code in str(exc) for code in UNSUPPORTED_CODES):
+                    res.unsupported = True  # not served by Upstox; not a source failure
+                else:
+                    res.failed_sources.add("upstox")
         elif inst.is_index:
             errors.append("no valid Upstox token (indices load from Upstox only)")
         if not inst.is_index:
@@ -659,9 +671,16 @@ def _run(settings, summary, store, fetchers, target, universe, start_from, symbo
             summary.by_source.update(res.by_source)
             summary.requests.update(res.requests)
             summary.malformed += res.malformed
+            summary.duplicates += res.duplicates
             summary.events_new += res.events
             for src in res.tried:
                 per_source[src]["failed" if src in res.failed_sources else "ok"] += 1
+            if res.error and res.unsupported and not res.by_source:
+                summary.unsupported += 1
+                log.info("candles_not_served_by_upstox", symbol=inst.symbol)
+                if not dry_run:
+                    progress.mark(inst.id, start_from or DEFAULT_FROM)
+                continue
             if res.error:
                 summary.failed += 1
                 summary.errors.append(f"{inst.symbol}: {res.error}")
