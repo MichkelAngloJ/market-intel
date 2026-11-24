@@ -309,3 +309,18 @@
 - Decision: Exchange items are keyed by their own identity (the feed guid, or link + title + time), so filings that share one PDF are kept as separate events; existing items were migrated once. Instruments carry the BSE scrip code from Upstox's public BSE file (matched by ISIN), so BSE filings link to stocks exactly. A source with no items for 14 days raises a warning.
 - Concern (planner): Some exchange feeds have no stable guid, so title + time stands in; a corrected filing may then appear as a second item.
 - Reason (owner): Insider and promoter filings are separate events that matter as features.
+
+## 2026-11-24 - End-to-end sprint by 27 November
+- Decision: Build a thin version of every layer by 27 Nov in six tasks (S1 login and daily candles; S2 features, labels and leakage test; S3 baselines and per-sector LightGBM with walk-forward after costs, SHAP and MLflow; S4 predictions, audit, outcomes and paper trading; S5 FastAPI and Streamlit; S6 scheduler, end-to-end CI test, docs and tag). Intraday, extra macro, NSE files, the live feed, MCP, Phase 2 AI extraction, LSTM, online learning, manipulation flags, IPO, mutual funds and the agent come after 28 Nov.
+- Concern (planner): Speed raises the risk of leakage and over-optimistic results; the demo shows an honest pipeline (model vs baselines after costs), not proof of profit.
+- Reason (owner): A complete end-to-end system is needed for 28 November.
+
+## 2026-11-24 - Upstox login and token
+- Decision: A one-command browser login with a local callback (and a paste-the-address fallback) gets the daily access token, kept only in Windows Credential Manager on the main laptop; non-secret expiry metadata lives in a state file. An expired token raises a clear error, one alert, and a health warning. The approve-on-phone flow isn't used because it needs a public webhook.
+- Concern (planner): No login on a given day means no Upstox data for that day; the yfinance backup and gap backfill cover it.
+- Reason (owner): A simple, safe daily login.
+
+## 2026-11-24 - Daily candles, backup and universe
+- Decision: Daily candles come from the Upstox V3 historical API with yfinance as a stock-only backup (each row tagged; Upstox replaces yfinance for the same day, never the reverse). Gaps are tracked against an index-derived trading calendar and backfilled resumably. The sprint universe is all NSE indices plus the Nifty 500 from 2015. Suspected split/bonus jumps are recorded, not corrected, and S2 excludes them from labels.
+- Concern (planner): Using today's Nifty 500 for history adds survivorship bias (past losers are missing), so results look better than reality; this must be stated in model cards. Raw prices aren't adjusted for corporate actions.
+- Reason (owner): The fastest reliable data base for an end-to-end demo.
