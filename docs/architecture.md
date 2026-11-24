@@ -96,6 +96,9 @@ flowchart LR
 | `python -m market_intel.features build` | Features v1 for the nifty500 (incremental; `--from` rebuilds) |
 | `python -m market_intel.features labels` | Forward labels (21 / 63 / 126 days) with exclusion reasons |
 | `python -m market_intel.features check-leakage` | The leakage test on the stored candles (`--sample N`) |
+| `python -m market_intel.models train --horizon 21` | Walk-forward training, baselines after costs, holdout, final retrain, MLflow and registry |
+| `python -m market_intel.models report` | The last training report (tables vs baselines) |
+| `python -m market_intel.models ui` | The local MLflow UI on 127.0.0.1 |
 | `python -m market_intel.candles special-sessions` | Lists special sessions and deletes their gap rows (`--dry-run`) |
 | `python -m market_intel.features build` | Features v1 for the nifty500 (incremental; `--from` rebuilds) |
 | `python -m market_intel.features labels` | Forward labels (21 / 63 / 126 days) with exclusion reasons |
@@ -159,6 +162,7 @@ see `src/market_intel/config.py`.
 | `.env` (secrets and machine settings) | Each laptop, copied by hand | **Never** |
 | `docker/compose.env` (Docker database passwords) | The main laptop | **Never** |
 | `logs/` | JSON log files on each laptop, one per component (`LOG_DIR`) | Never |
+| `data/mlflow/`, `data/models/` | MLflow tracking (sqlite + artifacts), model files and cards | Never |
 | `data/` | Local data and state, e.g. `data/state/alert_throttle.json` the downloaded instrument files in `data/raw/upstox/instruments/`, and the news feed and source-health state in `data/state/` (`DATA_DIR`) | Never |
 | `drive_sync/` | Local folder for exports and backups | Never |
 | Postgres tables | The Postgres database (see [Postgres schema v1](#postgres-schema-v1)) | No |
@@ -292,7 +296,7 @@ could be any machine on the network, so it needs TLS.
 Defined in `src/market_intel/db/schema.py` (SQLAlchemy Core) and created by Alembic migrations
 in `migrations/` (0001 schema, 0002 grants for `mi_app`, 0003 trigger and TEMP grant, 0004
 instrument seen dates, symbol reuse, symbol history and watchlist, 0005 BSE scrip codes, 0006
-universe members and price events, 0007 features and labels).
+universe members and price events, 0007 features and labels, 0008 the model registry).
 
 | Table | Holds |
 |---|---|
@@ -306,6 +310,7 @@ universe members and price events, 0007 features and labels).
 | `universe_members` | Which instruments belong to a named universe (`nifty500`, from the sector import), as of a date |
 | `price_events` | Suspected split/bonus days found in the candles (ratio); prices are never changed |
 | `features_daily` | Features v1 per instrument, trading day and feature version (one double column per feature) |
+| `model_versions` | Every trained model version: name, sector or pooled, training range, holdout, metrics, beats_baseline, status (candidate / active / retired), MLflow run, model card |
 | `labels_daily` | Forward returns over 21 / 63 / 126 regular trading days and up/down, or NULL with an exclusion reason; a separate table so features can never contain labels |
 | `features_daily` | Features v1 per instrument, trading day and feature version (one double column per feature) |
 | `labels_daily` | Forward returns over 21 / 63 / 126 regular trading days and up/down, or NULL with an exclusion reason; a separate table so features can never contain labels |
@@ -835,6 +840,77 @@ from any time, a label-named feature, a builder that calls the label code) and r
 test to catch each one. The test only catches the patterns it checks, so every new feature must
 go through `build_features`.
 
+## Models, evaluation, costs and the registry
+
+Sprint task S3 (decisions 2026-11-24). Command: `market_intel.models` (`train`, `report`, `ui`);
+logs to `logs/models.jsonl`. Modules: `market_intel.evaluation` (folds, metrics, portfolio),
+`market_intel.costs`, `market_intel.explain` (SHAP), `market_intel.models` (training, MLflow,
+registry).
+
+- **Target and rows:** horizon 21 trading days; a LightGBM **classifier** (up/down) and
+  **regressor** (forward return) per model. Training rows: features v1 except the news counts
+  (not for training) + 21-day labels that exist, stocks with at least 252 days of history
+  (thinner stocks are excluded from training; their later predictions must say "thin data").
+- **Per-sector vs pooled:** one model per sector with at least 20,000 training rows and 8
+  stocks (decided on the rows before the holdout); the other sectors share ONE **pooled** model
+  (all sectors, sector as a categorical feature), flagged "pooled fallback" in its card. In a
+  fold where a sector has under 2,000 training rows, its stocks use the pooled model.
+- **Fixed settings, no tuning:** 200 trees, learning rate 0.05, 31 leaves, at least 200 rows
+  per leaf, 80% row and column sampling, L2 1.0, `deterministic`, seed 42.
+- **Walk-forward:** yearly test folds from 2018 (plus the part of the holdout's year before
+  it), expanding window. **Purge:** a training row's label window (t, t+21] must end before the
+  test fold starts. **Embargo:** rows in the 21 trading days after an earlier test fold don't
+  train later folds. A fold without training rows is left out.
+- **Holdout:** the last 6 months of usable 21-day labels, evaluated ONCE after all folds, with
+  a model trained on everything allowed before it; reported separately and never used for a
+  choice. Then every model is retrained on ALL usable rows: the S4 **candidate**.
+- **Baselines** (same folds, dates and costs): always-up (everything predicted up, so its
+  portfolio is the equal-weight universe), momentum (score = past 21-day return), SMA rule
+  (close > SMA50; score = close / SMA50 - 1), equal-weight universe, Nifty 50 bought once and
+  held.
+- **Classification metrics** per fold, overall and per sector: AUC, accuracy, precision for
+  "up", Brier score, a 10-bin calibration table.
+- **The portfolio test (the honest one):** every 21 trading days (non-overlapping), the top
+  K = 20 stocks by predicted probability (tie-break: predicted return), equal weight, enter at
+  open(t+1), exit at close(t+21), after costs. A stock held again pays nothing; buys and sells
+  pay the costs below. A pick that can't be entered (no next-day open) earns 0, so nothing is
+  dropped with hindsight; returns across a suspected split/bonus are corrected by its recorded
+  ratio. Momentum and SMA use their own scores; the equal-weight universe holds every candidate.
+  Reported: total and annual return, Sharpe (no risk-free rate), max drawdown, hit rate,
+  turnover and costs paid. Per model, the same test runs on its own stocks with
+  K = min(20, max(3, stocks / 3)). Starting capital Rs 10 lakh (fixed charges depend on it).
+- **beats_baseline:** the model's after-cost annual return over the walk-forward beats BOTH the
+  equal-weight universe AND the best of momentum, SMA rule and Nifty 50. The holdout result is
+  reported next to it.
+- **Costs** (`market_intel.costs`, all parameters): equity delivery through Upstox, values
+  checked 2026-11-24 on https://upstox.com/brokerage-charges/ (NSE's own page timed out that day,
+  so exchange figures are Upstox's published copy): brokerage Rs 20 per order; STT 0.1% on buy
+  and sell (from 1 April 2026); NSE transaction charge 0.00307% per side incl. IPFT (from 1 March
+  2026); SEBI fee Rs 10 per crore per side; stamp duty 0.015% on buys; GST 18% on brokerage +
+  transaction + DP charges; DP charge Rs 20 per scrip per sell day. Slippage per side by the
+  20-day mean traded value: 10 bps at Rs 100 crore a day or more, 20 bps from Rs 10 crore, 40 bps
+  below. A unit test checks a Rs 50,000 round trip by hand.
+- **SHAP** (`market_intel.explain`): TreeExplainer on each final classifier gives the global
+  importance (mean |SHAP| on 2,000 sampled rows); `top_reasons(model, row, k=5)` turns the
+  largest contributions into plain sentences from tested templates ("Price is 12% above its
+  50-day average (raises the model's up-probability)"). SHAP explains the model, not the market,
+  and no sentence recommends anything.
+- **MLflow:** local only. Tracking database `data/mlflow/mlflow.db` (sqlite), artifacts in
+  `data/mlflow/artifacts` (git-ignored), experiment `market-intel-21d`. Each `train` is a parent
+  run (parameters, headline metrics, the report) with one nested run per model (parameters,
+  metrics, both model files, the SHAP table, the card). `models ui` starts the UI on 127.0.0.1
+  only.
+- **Registry** (`model_versions`, migration 0008): one row per model and version (name such as
+  `lgbm_21d_information_technology` or `lgbm_21d_pooled`, horizon, sector, kind sector | pooled,
+  training range, holdout start, metrics, beats_baseline, MLflow run id, card path). Status is
+  `candidate` (default), `active` or `retired`; training only ever writes `candidate`, and
+  nothing becomes `active` without paper-trading results and the owner's approval. Model files
+  and cards are in `data/models/` (git-ignored); `data/models/last_report.json` holds the last
+  report.
+- **Model cards** state the data range, features, folds, metrics vs every baseline, the
+  holdout, the biases (survivorship from today's Nifty 500; raw prices), the thin-data and
+  pooled-fallback warnings, and "Beats the baselines after costs: yes/no" in plain words.
+
 ## Health check
 
 `uv run python -m market_intel.health` runs every check and prints `STATUS | CHECK | MESSAGE`;
@@ -924,6 +1000,7 @@ Data Health page (no secrets; hosts may appear).
   instruments refresh on a small fake file twice (the second run must make 0 changes),
   features, labels and the leakage test on synthetic candles
   (`scripts/fake_market_data.py`, which refuses a database that already holds candles),
+  then `models train` and `models report` on the same synthetic data,
   features, labels and the leakage test on synthetic candles
   (`scripts/fake_market_data.py`, which refuses a database that already holds candles),
   `db_check`
@@ -931,7 +1008,7 @@ Data Health page (no secrets; hosts may appear).
   `docker/`, the `db`, `mongo` and `sources` packages, `db_check.py`, `health.py`,
   `ingestion.py`, `instruments.py`, `watchlist.py`, `news.py`, `source_health.py`,
   `rate_limit.py`, `candles.py`, `upstox.py`, `features.py`, `feature_spec.py`,
-  `scripts/fake_market_data.py`,
+  `scripts/fake_market_data.py`, `models.py`, `evaluation.py`, `costs.py`, `explain.py`,
   `config/news_feeds.toml`, `mongo_setup.py`,
   `config.py`, `migrations/`, `alembic.ini`, `tests/integration/`, `pyproject.toml`, `uv.lock`
   and the workflow file.
@@ -955,7 +1032,8 @@ instruments and the watchlist (1.1) in [Instruments and watchlist](#instruments-
 news (1.2) in [News and exchange feeds](#news-and-exchange-feeds),
 [Per-company news (Google News RSS)](#per-company-news-google-news-rss) (1.2b),
 [Upstox login and daily candles](#upstox-login-and-daily-candles) (S1),
-[Features, labels and the leakage test](#features-labels-and-the-leakage-test) (S2) and
+[Features, labels and the leakage test](#features-labels-and-the-leakage-test) (S2),
+[Models, evaluation, costs and the registry](#models-evaluation-costs-and-the-registry) (S3) and
 [Source health](#source-health). What each factor is and when it's built:
 [factor map](factors.md).
 

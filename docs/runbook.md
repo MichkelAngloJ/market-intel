@@ -283,6 +283,7 @@ JSON object per line, times in UTC:
 | `market_intel.upstox` (login, status) | `logs/upstox.jsonl` (never the token) |
 | `market_intel.candles` | `logs/candles.jsonl` |
 | `market_intel.features` (build, labels, check-leakage) | `logs/features.jsonl` |
+| `market_intel.models` (train, report, ui) | `logs/models.jsonl` |
 | Code that names no component | `logs/market_intel.jsonl` |
 | Later Phase 1 jobs | `logs/<component>.jsonl`, named in each job's section |
 
@@ -410,6 +411,27 @@ ORDER BY g.gap_start DESC LIMIT 50;
 
 **Price events.** `price_events` lists suspected split/bonus days (a sudden 1/2, 1/3, ... price
 jump while the market was still). Prices stay as they were; S2 leaves these days out of labels.
+
+## Models
+
+How it works: [architecture](architecture.md#models-evaluation-costs-and-the-registry).
+
+| Task | Command |
+|---|---|
+| Train (walk-forward, holdout once, final retrain; ~20-40 min) | `uv run python -m market_intel.models train --horizon 21` |
+| Show the last report again | `uv run python -m market_intel.models report` |
+| Open the MLflow UI (this laptop only) | `uv run python -m market_intel.models ui`, then http://127.0.0.1:5000 |
+| The same with plain MLflow | `uv run mlflow ui --backend-store-uri sqlite:///<repo folder>/data/mlflow/mlflow.db --host 127.0.0.1` |
+
+Never start the UI with `--host 0.0.0.0`: it would expose the runs to the network.
+
+**Reading the report.** The walk-forward portfolio table is the honest test: the model's top 20
+every 21 trading days, after costs, next to the equal-weight universe, always-up (the same as the
+equal-weight universe), momentum, the SMA rule and Nifty 50. "beats the baselines: YES" needs
+the model to beat the equal-weight universe AND the best other baseline. The holdout (the last 6
+months) is evaluated once and shown separately; never retrain or change settings because of it.
+Every training run registers new `candidate` model versions; none becomes `active` without
+paper-trading results and the owner's approval. Model cards: `data/models/<name>-v<version>.md`.
 
 ## Features and labels
 
