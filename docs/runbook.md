@@ -17,7 +17,8 @@ All commands run from `<repo folder>` with `uv run` in front.
 5. **Data (until the scheduler, S6, does it):** each morning
    `uv run python -m market_intel.upstox login` (see
    [Upstox login and daily candles](#upstox-login-and-daily-candles)); after 18:00 IST
-   `uv run python -m market_intel.candles daily`; once a day after ~06:00 IST
+   `uv run python -m market_intel.candles daily`, then `features build` and `features labels`
+   (see [Features and labels](#features-and-labels)); once a day after ~06:00 IST
    `uv run python -m market_intel.instruments refresh` (see
    [Instruments and watchlist](#instruments-and-watchlist)); news whenever you like,
    `uv run python -m market_intel.news fetch` (see
@@ -281,6 +282,7 @@ JSON object per line, times in UTC:
 | `market_intel.news` (fetch, status) | `logs/news.jsonl` |
 | `market_intel.upstox` (login, status) | `logs/upstox.jsonl` (never the token) |
 | `market_intel.candles` | `logs/candles.jsonl` |
+| `market_intel.features` (build, labels, check-leakage) | `logs/features.jsonl` |
 | Code that names no component | `logs/market_intel.jsonl` |
 | Later Phase 1 jobs | `logs/<component>.jsonl`, named in each job's section |
 
@@ -397,9 +399,8 @@ command again.
 
 **Gaps.** `open`: days still missing, retried on the next run (usually filled after the next
 login). `unfillable`: every source failed for those days (often a trading suspension); nothing
-to do. Most stock gaps are special weekend sessions that Nifty 50 has but Upstox and Yahoo
-don't have for most stocks (e.g. Diwali Muhurat trading, a Budget-day Saturday). To list
-them, with the app login:
+to do. Special weekend sessions (Diwali Muhurat trading, a Budget-day Saturday) are not gaps
+since S2: they are left out of the gap calendar. To list the gaps, with the app login:
 
 ```sql
 SELECT i.symbol, g.gap_start, g.gap_end, g.status FROM data_gaps g
@@ -409,6 +410,28 @@ ORDER BY g.gap_start DESC LIMIT 50;
 
 **Price events.** `price_events` lists suspected split/bonus days (a sudden 1/2, 1/3, ... price
 jump while the market was still). Prices stay as they were; S2 leaves these days out of labels.
+
+## Features and labels
+
+How it works: [architecture](architecture.md#features-labels-and-the-leakage-test).
+
+| Task | Command |
+|---|---|
+| Features for new days (after the candles) | `uv run python -m market_intel.features build` |
+| Rebuild features from a day | `uv run python -m market_intel.features build --from YYYY-MM-DD` |
+| Recompute the labels | `uv run python -m market_intel.features labels` |
+| Leakage test on the real data | `uv run python -m market_intel.features check-leakage --sample 500` |
+| Special sessions and their gap rows | `uv run python -m market_intel.candles special-sessions --dry-run`, then without `--dry-run` |
+
+**Order each day:** candles, then `features build`, then `features labels`. The build summary
+shows the rows written and the % of NULL per feature (long windows such as SMA200 and the
+52-week features are NULL for a stock's first year). The labels summary shows, per horizon, the
+usable rows, % up and the rows excluded by reason (`beyond_data` for the most recent days is
+normal: their future isn't known yet).
+
+**If `check-leakage` fails:** don't train or use models. It names the check, the instrument and
+day, and the features that changed; the cause is a feature that looks ahead. Fix the feature in
+`build_features` (a code task) and run the test again.
 
 ## News feeds and source health
 

@@ -65,6 +65,7 @@ Details, including how to copy secrets safely, are in the
 | `uv run python -m market_intel.news company-fetch` | Per-company news (Google News RSS) for the watchlist and recent filers; politely rate-limited, stops for the day if blocked |
 | `uv run python -m market_intel.upstox login` | The daily Upstox login in the browser (token kept in Windows Credential Manager; `status` shows the hours left) |
 | `uv run python -m market_intel.candles daily` | Daily candles for all NSE indices and the Nifty 500 (Upstox, yfinance backup for stocks), with gaps and resume |
+| `uv run python -m market_intel.features build` | Features v1 for the Nifty 500 (then `labels`; `check-leakage` runs the leakage test) |
 | `uv run python -m market_intel.watchlist list` | Shows the watchlist (`add SYMBOL`, `remove SYMBOL`; max 50, stored only in the database) |
 
 The daily routine and what to do when a check fails are in the

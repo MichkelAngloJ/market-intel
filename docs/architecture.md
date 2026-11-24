@@ -93,6 +93,14 @@ flowchart LR
 | `python -m market_intel.news company-fetch` | Per-company news from Google News RSS for the watchlist and recent filers (`--symbol`, `--force`, `--dry-run`) |
 | `python -m market_intel.upstox login` | The daily Upstox login in the browser; the token goes to the credential store (`status`: valid / expired) |
 | `python -m market_intel.candles daily` | Daily candles from Upstox (yfinance backup for stocks) with gaps and resume (`--universe`, `--from`, `--symbol`, `--dry-run`) |
+| `python -m market_intel.features build` | Features v1 for the nifty500 (incremental; `--from` rebuilds) |
+| `python -m market_intel.features labels` | Forward labels (21 / 63 / 126 days) with exclusion reasons |
+| `python -m market_intel.features check-leakage` | The leakage test on the stored candles (`--sample N`) |
+| `python -m market_intel.candles special-sessions` | Lists special sessions and deletes their gap rows (`--dry-run`) |
+| `python -m market_intel.features build` | Features v1 for the nifty500 (incremental; `--from` rebuilds) |
+| `python -m market_intel.features labels` | Forward labels (21 / 63 / 126 days) with exclusion reasons |
+| `python -m market_intel.features check-leakage` | The leakage test on the stored candles (`--sample N`) |
+| `python -m market_intel.candles special-sessions` | Lists special sessions and deletes their gap rows (`--dry-run`) |
 | `python -m market_intel.news rematch-exchange` | Matches stored exchange items to stocks again (BSE code, then name) |
 | `python -m market_intel.news migrate-exchange-keys` | Recomputes the item keys of stored exchange items (`--dry-run`) |
 
@@ -284,7 +292,7 @@ could be any machine on the network, so it needs TLS.
 Defined in `src/market_intel/db/schema.py` (SQLAlchemy Core) and created by Alembic migrations
 in `migrations/` (0001 schema, 0002 grants for `mi_app`, 0003 trigger and TEMP grant, 0004
 instrument seen dates, symbol reuse, symbol history and watchlist, 0005 BSE scrip codes, 0006
-universe members and price events).
+universe members and price events, 0007 features and labels).
 
 | Table | Holds |
 |---|---|
@@ -297,6 +305,10 @@ universe members and price events).
 | `data_gaps` | Missing data found per instrument and interval, and how it was resolved |
 | `universe_members` | Which instruments belong to a named universe (`nifty500`, from the sector import), as of a date |
 | `price_events` | Suspected split/bonus days found in the candles (ratio); prices are never changed |
+| `features_daily` | Features v1 per instrument, trading day and feature version (one double column per feature) |
+| `labels_daily` | Forward returns over 21 / 63 / 126 regular trading days and up/down, or NULL with an exclusion reason; a separate table so features can never contain labels |
+| `features_daily` | Features v1 per instrument, trading day and feature version (one double column per feature) |
+| `labels_daily` | Forward returns over 21 / 63 / 126 regular trading days and up/down, or NULL with an exclusion reason; a separate table so features can never contain labels |
 | `llm_spend` | Every LLM call's cost; the view `v_llm_spend_monthly` sums it per IST month |
 
 Key rules:
@@ -651,9 +663,11 @@ logs to `logs/upstox.jsonl`) and `market_intel.candles daily` (`logs/candles.jso
   from Upstox only.
 - **Loader** (`candles daily [--universe indices|nifty500|watchlist|all] [--from DATE]
   [--symbol S] [--dry-run]`):
-  - **Universes:** `indices` = all active NSE indices; `nifty500` = `universe_members`
+  - **Universes:** `indices` = all active NSE indices except the BHARATBOND ones (S2); `nifty500` = `universe_members`
     (written by the sector import: today's Nifty 500 list); `watchlist`; `all` = their union.
-    Nifty 50 is always loaded first: its candle days are the **trading calendar**.
+    Nifty 50 is always loaded first: its candle days are the **trading calendar**, minus
+    special sessions (from S2; see
+    [Features, labels and the leakage test](#features-labels-and-the-leakage-test)).
   - **Incremental:** from each instrument's last stored day + 1 up to the last trading day
     (today after 18:00 IST, otherwise yesterday); `--from` also loads earlier history (an empty
     instrument starts at 2015-01-01). Days stored from yfinance are asked from Upstox again
@@ -680,6 +694,146 @@ logs to `logs/upstox.jsonl`) and `market_intel.candles daily` (`logs/candles.jso
   dropped out are missing and results look better than reality; model cards must say so.
 - **Exchange rematch:** `news rematch-exchange` sets stored exchange items' `symbols` again by
   BSE code, then by name (only `symbols` changes, only where different).
+
+## Features, labels and the leakage test
+
+Sprint task S2 (decisions 2026-11-24). Command: `market_intel.features` (`build`, `labels`,
+`check-leakage`); logs to `logs/features.jsonl`. Column lists: `market_intel.feature_spec`
+(one list shared by the schema, the builder and the leakage test).
+
+**Timing convention** (enforced in code and by the leakage test):
+
+- The features for trading day t use ONLY candles up to and including t's close.
+- `prediction_time(t)` = 08:30 IST on the next weekday after t. A holiday calendar isn't
+  available; on a holiday this cutoff is earlier than the real next session, never later.
+- Entry is at `open(t+1)`, the next regular trading day's open.
+- News features use only items with `available_at <= prediction_time(t)`.
+
+**Regular sessions:** a **special session** is a calendar (Nifty 50) day on which fewer than 50%
+of the nifty500 members that already had history have a candle (e.g. Diwali Muhurat trading,
+a Budget-day Saturday; 2 days so far). Special sessions are removed from every candle series
+before features are computed, are not label days, and are not part of the loader's gap
+calendar (`candles special-sessions` lists them and deletes their gap rows). The 4 BHARATBOND
+indices are not in the `indices` universe (Upstox doesn't serve them); bond indices keep their
+valid rows but no feature or model uses them.
+
+**Features v1** (`features_daily`, one double column each; PK instrument, day, version; one
+pure function `build_features(candles, market, sector)` that never reads the database):
+
+| Group | Features |
+|---|---|
+| Returns | log returns over 1, 5, 20, 60, 120 days |
+| Volatility | std of daily log returns over 20 and 60 days; ATR14 / close |
+| Trend | close / SMA20, SMA50, SMA200 - 1; SMA20 / SMA50 - 1 |
+| Momentum | RSI14 (Wilder smoothing) |
+| Volume | z-score of log(1 + volume) vs 20 days; log of the 20-day mean traded value |
+| 52 weeks | close / 252-day max high - 1; close / 252-day min low - 1 |
+| Gap | open / previous close - 1 |
+| Relative strength | ret_20d minus Nifty 50 ret_20d; minus the sector's equal-weight ret_20d (nifty500 members of the same sector, from our own candles) |
+| Market | Nifty 50 r5, r20, close / SMA200 - 1; India VIX level and 5-day change |
+| Calendar | day of week, month |
+| Flags | history_days; a suspected split/bonus in the last 5 days |
+| News (**not for training** yet) | exchange items over 1 and 5 prediction windows; company news over 5 |
+
+Every rolling window looks back only and needs its full length (otherwise NULL). Instruments
+with under 252 days of history are still stored (with `history_days`), so S3 can filter and
+warn. `build` is incremental (new days per instrument; `--from` rebuilds from a day) and
+bulk-loads with COPY inside an ingestion run (`features_build`).
+
+**Labels** (`labels_daily`, a SEPARATE table, so a feature row can never hold a label):
+`fwd_return(h) = close(t+h) / open(t+1) - 1` over h REGULAR trading days, h = 21, 63, 126;
+`up = fwd_return > 0`. NULL with `excluded_reason` when the window (t, t+h] runs past the data
+(`beyond_data`), contains a special session (`special_session`), a suspected split/bonus
+(`price_event`) or a calendar day without the stock's candle (`gap`). A database check makes a
+row either a label or a reason. `labels` recomputes every label of the universe (labels change
+as new candles arrive), inside an ingestion run (`labels_build`).
+
+**Leakage test** (`check-leakage`; also in CI on synthetic data, where any failure fails the
+build): on sampled (instrument, day) pairs,
+
+- a) **truncation:** features for t from the full history equal features after deleting every
+  candle (all instruments, market, events) after t and every news item after
+  `prediction_time(t)`;
+- b) **late news:** adding or moving news after `prediction_time(t)` changes no feature for t;
+- c) **label names:** no feature name is or contains a label word, and the builder never
+  mentions the labels;
+- d) **shifted data:** changing candles after t changes no feature for t; changing candles up to
+  t changes no label for t; changing candles after t changes an unexcluded label.
+
+Unit tests feed deliberately leaky features (tomorrow's close, a centred moving average, news
+from any time, a label-named feature, a builder that calls the label code) and require the
+test to catch each one. The test only catches the patterns it checks, so every new feature must
+go through `build_features`.
+
+## Features, labels and the leakage test
+
+Sprint task S2 (decisions 2026-11-24). Command: `market_intel.features` (`build`, `labels`,
+`check-leakage`); logs to `logs/features.jsonl`. Column lists: `market_intel.feature_spec`
+(one list shared by the schema, the builder and the leakage test).
+
+**Timing convention** (enforced in code and by the leakage test):
+
+- The features for trading day t use ONLY candles up to and including t's close.
+- `prediction_time(t)` = 08:30 IST on the next weekday after t. A holiday calendar isn't
+  available; on a holiday this cutoff is earlier than the real next session, never later.
+- Entry is at `open(t+1)`, the next regular trading day's open.
+- News features use only items with `available_at <= prediction_time(t)`.
+
+**Regular sessions:** a **special session** is a calendar (Nifty 50) day on which fewer than 50%
+of the nifty500 members that already had history have a candle (e.g. Diwali Muhurat trading,
+a Budget-day Saturday; 2 days so far). Special sessions are removed from every candle series
+before features are computed, are not label days, and are not part of the loader's gap
+calendar (`candles special-sessions` lists them and deletes their gap rows). The 4 BHARATBOND
+indices are not in the `indices` universe (Upstox doesn't serve them); bond indices keep their
+valid rows but no feature or model uses them.
+
+**Features v1** (`features_daily`, one double column each; PK instrument, day, version; one
+pure function `build_features(candles, market, sector)` that never reads the database):
+
+| Group | Features |
+|---|---|
+| Returns | log returns over 1, 5, 20, 60, 120 days |
+| Volatility | std of daily log returns over 20 and 60 days; ATR14 / close |
+| Trend | close / SMA20, SMA50, SMA200 - 1; SMA20 / SMA50 - 1 |
+| Momentum | RSI14 (Wilder smoothing) |
+| Volume | z-score of log(1 + volume) vs 20 days; log of the 20-day mean traded value |
+| 52 weeks | close / 252-day max high - 1; close / 252-day min low - 1 |
+| Gap | open / previous close - 1 |
+| Relative strength | ret_20d minus Nifty 50 ret_20d; minus the sector's equal-weight ret_20d (nifty500 members of the same sector, from our own candles) |
+| Market | Nifty 50 r5, r20, close / SMA200 - 1; India VIX level and 5-day change |
+| Calendar | day of week, month |
+| Flags | history_days; a suspected split/bonus in the last 5 days |
+| News (**not for training** yet) | exchange items over 1 and 5 prediction windows; company news over 5 |
+
+Every rolling window looks back only and needs its full length (otherwise NULL). Instruments
+with under 252 days of history are still stored (with `history_days`), so S3 can filter and
+warn. `build` is incremental (new days per instrument; `--from` rebuilds from a day) and
+bulk-loads with COPY inside an ingestion run (`features_build`).
+
+**Labels** (`labels_daily`, a SEPARATE table, so a feature row can never hold a label):
+`fwd_return(h) = close(t+h) / open(t+1) - 1` over h REGULAR trading days, h = 21, 63, 126;
+`up = fwd_return > 0`. NULL with `excluded_reason` when the window (t, t+h] runs past the data
+(`beyond_data`), contains a special session (`special_session`), a suspected split/bonus
+(`price_event`) or a calendar day without the stock's candle (`gap`). A database check makes a
+row either a label or a reason. `labels` recomputes every label of the universe (labels change
+as new candles arrive), inside an ingestion run (`labels_build`).
+
+**Leakage test** (`check-leakage`; also in CI on synthetic data, where any failure fails the
+build): on sampled (instrument, day) pairs,
+
+- a) **truncation:** features for t from the full history equal features after deleting every
+  candle (all instruments, market, events) after t and every news item after
+  `prediction_time(t)`;
+- b) **late news:** adding or moving news after `prediction_time(t)` changes no feature for t;
+- c) **label names:** no feature name is or contains a label word, and the builder never
+  mentions the labels;
+- d) **shifted data:** changing candles after t changes no feature for t; changing candles up to
+  t changes no label for t; changing candles after t changes an unexcluded label.
+
+Unit tests feed deliberately leaky features (tomorrow's close, a centred moving average, news
+from any time, a label-named feature, a builder that calls the label code) and require the
+test to catch each one. The test only catches the patterns it checks, so every new feature must
+go through `build_features`.
 
 ## Health check
 
@@ -768,11 +922,16 @@ Data Health page (no secrets; hosts may appear).
   passwords, then runs `mongo_setup` twice (the second run must change nothing), the
   migrations up, down to base and up again, `alembic check`, the integration tests, the
   instruments refresh on a small fake file twice (the second run must make 0 changes),
+  features, labels and the leakage test on synthetic candles
+  (`scripts/fake_market_data.py`, which refuses a database that already holds candles),
+  features, labels and the leakage test on synthetic candles
+  (`scripts/fake_market_data.py`, which refuses a database that already holds candles),
   `db_check`
   and `health --json` (no FAIL allowed). It runs only when a path in its filter changes:
   `docker/`, the `db`, `mongo` and `sources` packages, `db_check.py`, `health.py`,
   `ingestion.py`, `instruments.py`, `watchlist.py`, `news.py`, `source_health.py`,
-  `rate_limit.py`, `candles.py`, `upstox.py`,
+  `rate_limit.py`, `candles.py`, `upstox.py`, `features.py`, `feature_spec.py`,
+  `scripts/fake_market_data.py`,
   `config/news_feeds.toml`, `mongo_setup.py`,
   `config.py`, `migrations/`, `alembic.ini`, `tests/integration/`, `pyproject.toml`, `uv.lock`
   and the workflow file.
@@ -795,7 +954,8 @@ in [Data sources, rate limits and ingestion runs](#data-sources-rate-limits-and-
 instruments and the watchlist (1.1) in [Instruments and watchlist](#instruments-and-watchlist);
 news (1.2) in [News and exchange feeds](#news-and-exchange-feeds),
 [Per-company news (Google News RSS)](#per-company-news-google-news-rss) (1.2b),
-[Upstox login and daily candles](#upstox-login-and-daily-candles) (S1) and
+[Upstox login and daily candles](#upstox-login-and-daily-candles) (S1),
+[Features, labels and the leakage test](#features-labels-and-the-leakage-test) (S2) and
 [Source health](#source-health). What each factor is and when it's built:
 [factor map](factors.md).
 
