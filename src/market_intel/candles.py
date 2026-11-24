@@ -65,6 +65,8 @@ IST = ZoneInfo("Asia/Kolkata")
 DEFAULT_FROM = date(2015, 1, 1)
 CALENDAR_KEY = "NSE_INDEX|Nifty 50"
 UNIVERSES = ("indices", "nifty500", "watchlist", "all")
+# Indices Upstox's historical API doesn't serve (S1 review answer 1): not in "indices".
+NOT_SERVED_INDEX_PREFIX = "NSE_INDEX|BHARATBOND"
 # A day's candle is complete after the close; before this IST time "today" isn't loaded yet.
 DAY_READY_IST = time(18, 0)
 SPLIT_RATIOS = (
@@ -174,7 +176,8 @@ UNIVERSE_SQL = {
     "indices": (
         "SELECT id, symbol, segment, instrument_key FROM instruments"
         " WHERE exchange = 'NSE' AND segment = 'INDEX' AND is_active"
-        " AND instrument_key IS NOT NULL ORDER BY id"
+        " AND instrument_key IS NOT NULL"
+        f" AND instrument_key NOT LIKE '{NOT_SERVED_INDEX_PREFIX}%%' ORDER BY id"
     ),
     "nifty500": (
         "SELECT i.id, i.symbol, i.segment, i.instrument_key FROM instruments i"
@@ -320,10 +323,59 @@ class PgStore:
         ).fetchall()
         return {status: n for status, n in rows}
 
+    def special_sessions(self) -> list[date]:
+        return special_sessions(self.conn)
+
     def price_event_count(self, ids: Sequence[int]) -> int:
         return self.conn.execute(
             "SELECT count(*) FROM price_events WHERE instrument_id = ANY(%s)", (list(ids),)
         ).fetchone()[0]
+
+
+# --- special sessions (S1 review answer 2) -----------------------------------------------
+
+SPECIAL_SHARE = 0.5
+SPECIAL_SESSIONS_SQL = """
+WITH members AS (
+    SELECT u.instrument_id, min(c.trade_date) AS first_day
+    FROM universe_members u JOIN candles_daily c ON c.instrument_id = u.instrument_id
+    WHERE u.universe = %s GROUP BY u.instrument_id
+),
+days AS (
+    SELECT c.trade_date FROM candles_daily c JOIN instruments i ON i.id = c.instrument_id
+    WHERE i.instrument_key = %s
+)
+SELECT d.trade_date FROM days d
+JOIN members m ON m.first_day <= d.trade_date
+LEFT JOIN candles_daily c ON c.instrument_id = m.instrument_id AND c.trade_date = d.trade_date
+GROUP BY d.trade_date
+HAVING count(c.instrument_id) < %s * count(*)
+ORDER BY d.trade_date
+"""
+
+
+def special_sessions(
+    conn: Any, *, universe: str = "nifty500", calendar_key: str = CALENDAR_KEY
+) -> list[date]:
+    """Calendar (Nifty 50) days on which fewer than 50% of the nifty500 members that already
+    had history have a candle: special sessions such as Diwali Muhurat trading or a Budget-day
+    Saturday. They are left out of the gap and label calendar."""
+    rows = conn.execute(SPECIAL_SESSIONS_SQL, (universe, calendar_key, SPECIAL_SHARE)).fetchall()
+    return [r[0] for r in rows]
+
+
+def delete_special_session_gaps(conn: Any, days: Sequence[date], *, dry_run: bool) -> int:
+    """Delete gap rows that lie entirely on special sessions (one-day gaps on those days)."""
+    if not days:
+        return 0
+    where = (
+        " WHERE interval = '1d' AND (gap_start AT TIME ZONE 'Asia/Kolkata')::date = ANY(%s)"
+        " AND (gap_end AT TIME ZONE 'Asia/Kolkata')::date = (gap_start AT TIME ZONE"
+        " 'Asia/Kolkata')::date"
+    )
+    if dry_run:
+        return conn.execute("SELECT count(*) FROM data_gaps" + where, (list(days),)).fetchone()[0]
+    return conn.execute("DELETE FROM data_gaps" + where, (list(days),)).rowcount
 
 
 # --- progress (resume) -------------------------------------------------------------------
@@ -457,7 +509,9 @@ class Loader:
         if self.calendar_id is None:
             return
         closes = self.store.closes(self.calendar_id, date(1990, 1, 1))
-        self.calendar = [d for d, _ in closes]
+        # special sessions aren't part of the gap calendar (stores without them: none)
+        special = set(getattr(self.store, "special_sessions", lambda: [])())
+        self.calendar = [d for d, _ in closes if d not in special]
         self.market = dict(closes)
 
     def _fetch(self, inst: Inst, start: date, end: date, res: InstResult) -> list[DailyCandle]:
@@ -741,6 +795,10 @@ def main(argv: list[str] | None = None) -> int:
                        help="also load history from this day (YYYY-MM-DD)")  # fmt: skip
     daily.add_argument("--symbol", help="only this instrument (NSE symbol)")
     daily.add_argument("--dry-run", action="store_true", help="fetch, save nothing")
+    special = sub.add_parser(
+        "special-sessions", help="list special sessions and delete their gap rows"
+    )
+    special.add_argument("--dry-run", action="store_true", help="count only, delete nothing")
     args = parser.parse_args(argv)
     try:
         settings = get_settings()
@@ -750,6 +808,16 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(settings, COMPONENT)
     with bound_context(run_id=new_run_id(), component=COMPONENT):
         try:
+            if args.command == "special-sessions":
+                with postgres.connect(settings.require("database")) as conn:
+                    days = special_sessions(conn)
+                    gaps = delete_special_session_gaps(conn, days, dry_run=args.dry_run)
+                prefix = "DRY RUN (nothing deleted): " if args.dry_run else ""
+                print(f"{prefix}special sessions: {len(days)} days; gap rows on them"
+                      f" {'to delete' if args.dry_run else 'deleted'}: {gaps}")  # fmt: skip
+                for day in days:
+                    print(f"  {day.isoformat()} ({day.strftime('%a')})")
+                return 0
             summary = run_daily(
                 settings, universe=args.universe, start_from=args.start_from,
                 symbol=args.symbol, dry_run=args.dry_run,

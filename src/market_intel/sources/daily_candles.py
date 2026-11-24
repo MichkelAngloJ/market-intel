@@ -19,6 +19,7 @@ Rows that break the candle rules (OHLC range, negative volume, ...) are skipped 
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -155,10 +156,18 @@ def honest_session() -> Any:
     return session
 
 
-def _yf_download(**kwargs: Any) -> Any:
+def _load_yfinance() -> Any:
+    """Import yfinance with its curl_cffi backend (browser TLS impersonation) switched off: the
+    second guard (S1 review); the first is our own honest session on every call. The switch
+    is read when yfinance is first imported, which only happens here."""
+    os.environ["YF_DISABLE_CURL_CFFI"] = "1"
     import yfinance
 
-    return yfinance.download(**kwargs)
+    return yfinance
+
+
+def _yf_download(**kwargs: Any) -> Any:
+    return _load_yfinance().download(**kwargs)
 
 
 def fetch_yfinance(
