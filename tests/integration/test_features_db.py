@@ -29,9 +29,10 @@ def conn() -> Iterator[psycopg.Connection]:
 
 
 def add(conn, symbol, segment, key=None, sector=None):
+    # active, like real universe members (the whole transaction is rolled back)
     return conn.execute(
         "INSERT INTO instruments (segment, symbol, instrument_key, sector, is_active)"
-        " VALUES (%s, %s, %s, %s, false) RETURNING id",
+        " VALUES (%s, %s, %s, %s, true) RETURNING id",
         (segment, symbol, key, sector),
     ).fetchone()[0]
 
