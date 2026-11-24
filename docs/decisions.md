@@ -334,3 +334,13 @@
 - Decision: An automated leakage test (truncating future data, adding late news, a label-name check, and a deliberately leaky fake feature that must be caught) runs in CI and as a command on real data; any failure stops the build.
 - Concern (planner): Tests can only catch the leakage patterns they check; every new feature must keep using the shared build function.
 - Reason (owner): The spec requires a leakage test that fails the build.
+
+## 2026-11-24 - Model evaluation design
+- Decision: 21-day LightGBM classifier and regressor per sector (pooled fallback for small sectors), trained walk-forward with yearly folds, purge and a 21-day embargo, and a final 6-month holdout used once. Baselines: always-up, momentum, SMA rule, equal-weight universe and Nifty 50. The honest test is an after-cost portfolio of the top 20 picks every 21 trading days; "beats_baseline" requires beating the equal-weight universe and the best other baseline. Costs follow current official Indian charges plus liquidity-based slippage.
+- Concern (planner): Survivorship bias and unadjusted prices inflate results; a single holdout of 6 months is short. No model becomes active without paper-trading results and the owner's approval.
+- Reason (owner): Spec rules: walk-forward only, baselines, results after costs.
+
+## 2026-11-24 - SHAP reasons and MLflow tracking
+- Decision: SHAP TreeExplainer gives global importance per model and the top 5 plain-language reasons per prediction from tested templates. MLflow runs locally (sqlite + artifacts under the data folder, UI on 127.0.0.1 only). Models are versioned in model_versions with status candidate/active/retired and a model card each.
+- Concern (planner): SHAP explains the model, not the market; reasons are "why the model thinks so", not proof.
+- Reason (owner): Explain every prediction and version every model, as the spec requires.
