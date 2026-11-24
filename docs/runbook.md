@@ -397,7 +397,9 @@ command again.
 
 **Gaps.** `open`: days still missing, retried on the next run (usually filled after the next
 login). `unfillable`: every source failed for those days (often a trading suspension); nothing
-to do. To list them, with the app login:
+to do. Most stock gaps are special weekend sessions that Nifty 50 has but Upstox and Yahoo
+don't have for most stocks (e.g. Diwali Muhurat trading, a Budget-day Saturday). To list
+them, with the app login:
 
 ```sql
 SELECT i.symbol, g.gap_start, g.gap_end, g.status FROM data_gaps g
