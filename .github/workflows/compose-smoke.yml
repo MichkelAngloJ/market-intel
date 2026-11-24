@@ -21,6 +21,10 @@ on:
       - "src/market_intel/features.py"
       - "src/market_intel/feature_spec.py"
       - "scripts/fake_market_data.py"
+      - "src/market_intel/models.py"
+      - "src/market_intel/evaluation.py"
+      - "src/market_intel/costs.py"
+      - "src/market_intel/explain.py"
       - "config/news_feeds.toml"
       - "src/market_intel/sources/**"
       - "src/market_intel/mongo/**"
@@ -50,6 +54,10 @@ on:
       - "src/market_intel/features.py"
       - "src/market_intel/feature_spec.py"
       - "scripts/fake_market_data.py"
+      - "src/market_intel/models.py"
+      - "src/market_intel/evaluation.py"
+      - "src/market_intel/costs.py"
+      - "src/market_intel/explain.py"
       - "config/news_feeds.toml"
       - "src/market_intel/sources/**"
       - "src/market_intel/mongo/**"
@@ -172,6 +180,15 @@ jobs:
           uv run python -m market_intel.features build
           uv run python -m market_intel.features labels
           uv run python -m market_intel.features check-leakage --sample 40
+
+      # S3: walk-forward training, baselines after costs, SHAP, MLflow and the registry on the
+      # same synthetic data (both fake sectors are small, so only the pooled model trains).
+      - name: Models train and report on fake data
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          uv run python -m market_intel.models train --horizon 21
+          uv run python -m market_intel.models report
 
       - name: Database check
         env:

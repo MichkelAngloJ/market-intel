@@ -1,5 +1,5 @@
 """Seed a THROWAWAY database with synthetic market data for CI (compose-smoke): fake stocks in
-two sectors (universe nifty500), a fake Nifty 50 and India VIX, ~400 business days of
+two sectors (universe nifty500), a fake Nifty 50 and India VIX, ~1100 business days of
 random-walk candles, one special session and one suspected split.
 
     uv run python scripts/fake_market_data.py
@@ -18,7 +18,7 @@ import numpy as np
 from market_intel.config import get_settings
 from market_intel.db import postgres
 
-DAYS = 400
+DAYS = 1100  # ~4.4 years: enough for walk-forward folds and a holdout (S3)
 STOCKS = [
     (f"ZZFEAT{i}", f"INE9ZZ{i:05d}0", "Fake Sector A" if i < 4 else "Fake Sector B")
     for i in range(8)
@@ -50,7 +50,7 @@ def walk(rng: np.random.Generator, n: int, start: float) -> list[tuple[float, ..
 def main() -> int:
     settings = get_settings()
     rng = np.random.default_rng(42)
-    days = business_days(date(2025, 1, 6), DAYS)
+    days = business_days(date(2022, 1, 3), DAYS)
     special = days[200] + timedelta(days=(5 - days[200].weekday()))  # a Saturday session
     with postgres.connect(settings.require("database")) as conn:
         if conn.execute("SELECT EXISTS (SELECT 1 FROM candles_daily)").fetchone()[0]:
