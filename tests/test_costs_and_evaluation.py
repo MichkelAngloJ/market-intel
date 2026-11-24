@@ -121,13 +121,22 @@ def prices(days, path):
     return pd.DataFrame({"open": path, "close": path}, index=pd.Index(days))
 
 
-def test_period_returns_use_next_open_and_correct_a_split():
+def test_period_returns_use_the_next_open_and_mark_unmeasurable_windows():
     days = bdays(date(2024, 1, 1), 30)
-    flat = prices(days, [100.0] * 30)
+    rising = prices(days, [100.0 + i for i in range(30)])
     split = prices(days, [100.0] * 10 + [50.0] * 20)
-    r = ev.period_returns({1: flat, 2: split}, days, [days[0]], {2: [(days[10], 0.5)]}, step=21)
+    entry_day = prices(days, [100.0] + [50.0] * 29)  # the split is on t+1: entry already after it
+    jump = prices(days, [100.0] * 10 + [600.0] * 20)  # +500%: an unrecorded consolidation
+    r = ev.period_returns(
+        {1: rising, 2: split, 3: entry_day, 4: jump},
+        days,
+        [days[0]],
+        {2: [(days[10], 0.5)], 3: [(days[1], 0.5)]},
+        step=21,
+    )
     got = dict(zip(r.instrument_id, r.ret, strict=True))
-    assert got[1] == pytest.approx(0.0) and got[2] == pytest.approx(0.0)  # the split isn't a loss
+    assert got[1] == pytest.approx(121 / 101 - 1)  # open(t+1) to close(t+21)
+    assert math.isnan(got[2]) and math.isnan(got[3]) and math.isnan(got[4])  # unmeasurable
 
 
 def test_portfolio_math_costs_turnover_and_hits():

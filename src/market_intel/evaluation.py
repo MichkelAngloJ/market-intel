@@ -12,9 +12,10 @@ HOLDOUT: the last 6 months of usable labels; evaluated once, at the end, reporte
 Portfolio (the honest test): every 21 trading days (non-overlapping) pick the top K by score
 (tie-break: a second score), equal weight, enter at open(t+1), exit at close(t+21), pay costs.
 A stock that was already held and is picked again pays nothing; buys and sells pay
-:mod:`market_intel.costs` charges plus liquidity slippage. A pick without a next-day open (it
-didn't trade) earns 0: nothing is dropped with hindsight. Returns across a suspected split/bonus
-are corrected by the recorded ratio (prices themselves stay raw).
+:mod:`market_intel.costs` charges plus liquidity slippage. Prices are raw (not adjusted), so a
+period return is "unmeasurable" when the stock has no next-day open, a suspected split/bonus in
+the window, or a raw move below -90% / above +300% (most likely an unrecorded corporate action).
+Such a pick earns 0, for every strategy alike, and the report counts them.
 """
 
 from __future__ import annotations
@@ -32,6 +33,9 @@ from market_intel.costs import DEFAULT_COSTS, CostModel
 HORIZON = 21
 PERIODS_PER_YEAR = 252 / HORIZON
 HOLDOUT_MONTHS = 6
+# A 21-day raw return outside this range is treated as unmeasurable (on raw prices it is most
+# likely an unrecorded corporate action, e.g. a consolidation, not a real move).
+UNMEASURABLE_BELOW, UNMEASURABLE_ABOVE = -0.9, 3.0
 FIRST_TEST_YEAR = 2018
 
 
@@ -174,8 +178,10 @@ def period_returns(
     events: dict[int, list[tuple[date, float]]] | None = None,
     step: int = HORIZON,
 ) -> pd.DataFrame:
-    """Return from open(t+1) to close(t+step) per (date, instrument), corrected by recorded
-    split/bonus ratios inside the window. NaN when there is no open on t+1."""
+    """Return from open(t+1) to close(t+step) per (date, instrument) on raw prices. NaN
+    ("unmeasurable") when there is no open on t+1, when a suspected split/bonus lies in
+    (t, t+step], or when the raw return is below -90% or above +300%. In the portfolio test a
+    pick with an unmeasurable return earns 0, for every strategy alike."""
     pos = {d: i for i, d in enumerate(calendar)}
     rows = []
     for inst, frame in prices.items():
@@ -194,11 +200,13 @@ def period_returns(
             if window.empty:
                 rows.append((t, inst, math.nan))
                 continue
-            factor = 1.0
-            for d, ratio in inst_events:
-                if t < d <= th and ratio:
-                    factor /= ratio
-            rows.append((t, inst, float(window.iloc[-1]) * factor / float(entry) - 1))
+            if any(t < d <= th for d, _ in inst_events):
+                rows.append((t, inst, math.nan))  # a suspected split/bonus: unmeasurable
+                continue
+            ret = float(window.iloc[-1]) / float(entry) - 1
+            if not UNMEASURABLE_BELOW <= ret <= UNMEASURABLE_ABOVE:
+                ret = math.nan  # likely an unrecorded corporate action on raw prices
+            rows.append((t, inst, ret))
     return pd.DataFrame(rows, columns=["date", "instrument_id", "ret"])
 
 

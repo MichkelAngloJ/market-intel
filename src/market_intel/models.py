@@ -80,7 +80,8 @@ BIASES = (
     "Survivorship bias: today's Nifty 500 members are used for the whole history, so companies "
     "that dropped out are missing and results look better than reality.",
     "Raw prices: prices are not adjusted for splits and bonuses; label windows with a suspected "
-    "split/bonus are excluded, and portfolio returns are corrected by the recorded ratio.",
+    "split/bonus are excluded, and a portfolio period with one, or with a raw 21-day move below "
+    "-90% or above +300% (likely an unrecorded corporate action), earns 0 for every strategy.",
 )
 
 log = get_logger("market_intel.models")
@@ -333,6 +334,12 @@ def _clean(obj: Any) -> Any:
     return obj
 
 
+def _unmeasurable(returns: pd.DataFrame, dates: Sequence[date]) -> dict[str, int]:
+    """How many (stock, period) returns couldn't be measured on raw prices (earn 0)."""
+    part = returns[returns["date"].isin(set(dates))]
+    return {"stock_periods": int(part["ret"].isna().sum()), "of": int(len(part))}
+
+
 def classification_block(preds: pd.DataFrame) -> dict[str, Any]:
     rows = preds[preds["up"].notna()]
     return ev.classification_metrics(rows["up"].astype(bool), rows["prob"])
@@ -566,12 +573,14 @@ def run_training(
             ),
             **block(wf_dates, wf, None, k),
             "rebalances": len(wf_dates),
+            "unmeasurable": _unmeasurable(returns, wf_dates),
         },
         "holdout": {
             "classification": classification_block(hold),
             "baselines_classification": baseline_classification(hold_panel),
             **block(hold_dates, hold, None, k),
             "rebalances": len(hold_dates),
+            "unmeasurable": _unmeasurable(returns, hold_dates),
         },
         "models": {},
     }
@@ -902,6 +911,11 @@ def register(
 # --- report ------------------------------------------------------------------------------
 
 
+def _count(block: dict[str, Any]) -> str:
+    u = block.get("unmeasurable") or {}
+    return f"{u.get('stock_periods', 0):,} of {u.get('of', 0):,}"
+
+
 def report_lines(report: dict[str, Any], example: dict[str, Any] | None = None) -> list[str]:
     wf, hold = report["walk_forward"], report["holdout"]
     c = wf["classification"]
@@ -928,6 +942,9 @@ def report_lines(report: dict[str, Any], example: dict[str, Any] | None = None) 
             f" {int(m.get('rows') or 0):,}"
             for f, m in wf["per_fold"].items()
         ],
+        "",
+        "Unmeasurable stock-periods (raw prices; earn 0 for every strategy):"
+        f" walk-forward {_count(wf)}, holdout {_count(hold)}",
         "",
         f"Walk-forward portfolio after costs ({wf['rebalances']} rebalances):"
         f" beats the baselines: {'YES' if wf['beats_baseline'] else 'NO'}",
