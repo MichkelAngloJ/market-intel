@@ -334,9 +334,15 @@ def _clean(obj: Any) -> Any:
     return obj
 
 
-def _unmeasurable(returns: pd.DataFrame, dates: Sequence[date]) -> dict[str, int]:
-    """How many (stock, period) returns couldn't be measured on raw prices (earn 0)."""
-    part = returns[returns["date"].isin(set(dates))]
+def _unmeasurable(
+    returns: pd.DataFrame, dates: Sequence[date], panel: pd.DataFrame
+) -> dict[str, int]:
+    """How many candidate (stock, period) returns couldn't be measured on raw prices (earn 0).
+    Only candidates on each date count (not stocks that weren't listed yet)."""
+    cand = panel.loc[candidates(panel), ["trade_date", "instrument_id"]].rename(
+        columns={"trade_date": "date"}
+    )
+    part = returns[returns["date"].isin(set(dates))].merge(cand, on=["date", "instrument_id"])
     return {"stock_periods": int(part["ret"].isna().sum()), "of": int(len(part))}
 
 
@@ -573,14 +579,14 @@ def run_training(
             ),
             **block(wf_dates, wf, None, k),
             "rebalances": len(wf_dates),
-            "unmeasurable": _unmeasurable(returns, wf_dates),
+            "unmeasurable": _unmeasurable(returns, wf_dates, panel),
         },
         "holdout": {
             "classification": classification_block(hold),
             "baselines_classification": baseline_classification(hold_panel),
             **block(hold_dates, hold, None, k),
             "rebalances": len(hold_dates),
-            "unmeasurable": _unmeasurable(returns, hold_dates),
+            "unmeasurable": _unmeasurable(returns, hold_dates, panel),
         },
         "models": {},
     }

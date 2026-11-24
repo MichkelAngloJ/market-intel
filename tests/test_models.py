@@ -228,3 +228,23 @@ def test_the_mlflow_ui_is_local_only(tmp_path, monkeypatch):
     [cmd] = calls
     assert cmd[cmd.index("--host") + 1] == "127.0.0.1" and "0.0.0.0" not in cmd
     assert cmd[cmd.index("--backend-store-uri") + 1] == M.tracking_uri(settings)
+
+
+def test_unmeasurable_counts_only_candidates():
+    from datetime import date
+
+    panel = pd.DataFrame(
+        {
+            "trade_date": [date(2024, 1, 1)] * 2,
+            "instrument_id": [1, 2],
+            "history_days": [300.0, 10.0],
+        }
+    )
+    returns = pd.DataFrame(
+        {
+            "date": [date(2024, 1, 1)] * 3,
+            "instrument_id": [1, 2, 3],
+            "ret": [float("nan"), float("nan"), float("nan")],
+        }
+    )
+    assert M._unmeasurable(returns, [date(2024, 1, 1)], panel) == {"stock_periods": 1, "of": 1}
