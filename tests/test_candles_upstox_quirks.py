@@ -83,3 +83,15 @@ def test_an_instrument_upstox_does_not_serve_is_not_a_failure(settings):
     assert (summary.status, summary.failed, summary.unsupported) == ("success", 0, 1)
     assert conn.runs[1]["status"] == "success"
     assert "not served by Upstox 1" in summary.lines()[0]
+
+
+def test_the_sources_health_check_covers_the_candle_sources(settings):
+    from market_intel import health
+
+    sh = SourceHealth(settings.data_dir, alert=lambda *a, **k: None)
+    sh.record_content("upstox_candles", items=10, malformed=0, without_time=0)
+    for _ in range(3):
+        sh.record_failure("yfinance_candles", "yfinance: blocked")
+    result = health.check_sources(health.Context(lambda: settings))
+    assert result.status == "WARN" and "yfinance_candles: failures" in result.message
+    assert result.details["sources"] == 2
