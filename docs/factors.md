@@ -16,11 +16,16 @@ Phase 3 measures the contributions per sector and stock with SHAP instead of ass
 
 ## Factors
 
+Status (2026-11-24): **built**: the sector map (1.1), news and exchange feeds (1.2),
+per-company news (1.2b), daily candles for all NSE indices and the Nifty 500 from 2015
+(S1; price and volume behaviour, overall market and sector inputs for S2). Everything
+else in the table is still to come.
+
 | Factor group | Examples | Matters most for | Free source | Built in |
 |---|---|---|---|---|
-| Overall market | Nifty, global markets, breadth | intraday, days | Upstox index candles | 1.4–1.6 |
+| Overall market | Nifty, global markets, breadth | intraday, days | Upstox index candles (daily: built in S1) | S1, 1.5–1.6 |
 | Sector | sector index, peer moves | days–weeks | sector indices + sector map | 1.1, 1.4 |
-| Price and volume behaviour | trend, momentum, gaps, 52-week high, volatility | minutes to months | candles | 1.4–1.5, Phase 2 |
+| Price and volume behaviour | trend, momentum, gaps, 52-week high, volatility | minutes to months | candles (daily: built in S1) | S1, S2, 1.5 |
 | Delivery % | real buying vs same-day churn | days; pump detection | NSE daily bhavcopy | 1.6b |
 | Order book | buy/sell imbalance, large orders | minutes | Upstox live feed (recorded from 1.7; no history exists) | 1.7 |
 | Results | surprise, margins, guidance | days around results; months | NSE/BSE results feeds + filing PDFs | 1.2, Phase 2 |

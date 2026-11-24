@@ -37,8 +37,8 @@ flowchart LR
     COLAB[Colab - later] -->|git clone| GH
 
     UPFILE[Upstox public instrument file] -->|daily refresh| CLI
-    UPSTOX[Upstox API - planned] -.-> CLI
-    YF[yfinance - planned] -.-> CLI
+    UPSTOX[Upstox API - login and daily candles] -->|upstox login, candles daily| CLI
+    YF[yfinance - stock backup] -->|candles daily| CLI
     RSS[RSS news and exchange feeds] -->|news fetch| CLI
     LLM[LLMs - planned] -.-> CLI
     MODELS[Models - planned] -.-> CLI
@@ -46,7 +46,7 @@ flowchart LR
     CLI -.-> DASH[Dashboard - planned]
 
     classDef planned stroke-dasharray: 5 5
-    class UPSTOX,YF,LLM,MODELS,SCHED,DASH,COLAB planned
+    class LLM,MODELS,SCHED,DASH,COLAB planned
 ```
 
 ### Planned data flow
@@ -91,6 +91,9 @@ flowchart LR
 | `python -m market_intel.news fetch` | Fetches the RSS news and exchange feeds into `news_items` (`--feed`, `--force`, `--dry-run`) |
 | `python -m market_intel.news status` | Per-feed fetch and source-health status |
 | `python -m market_intel.news company-fetch` | Per-company news from Google News RSS for the watchlist and recent filers (`--symbol`, `--force`, `--dry-run`) |
+| `python -m market_intel.upstox login` | The daily Upstox login in the browser; the token goes to the credential store (`status`: valid / expired) |
+| `python -m market_intel.candles daily` | Daily candles from Upstox (yfinance backup for stocks) with gaps and resume (`--universe`, `--from`, `--symbol`, `--dry-run`) |
+| `python -m market_intel.news rematch-exchange` | Matches stored exchange items to stocks again (BSE code, then name) |
 | `python -m market_intel.news migrate-exchange-keys` | Recomputes the item keys of stored exchange items (`--dry-run`) |
 
 All are run with `uv run` in front.
@@ -280,7 +283,8 @@ could be any machine on the network, so it needs TLS.
 
 Defined in `src/market_intel/db/schema.py` (SQLAlchemy Core) and created by Alembic migrations
 in `migrations/` (0001 schema, 0002 grants for `mi_app`, 0003 trigger and TEMP grant, 0004
-instrument seen dates, symbol reuse, symbol history and watchlist, 0005 BSE scrip codes).
+instrument seen dates, symbol reuse, symbol history and watchlist, 0005 BSE scrip codes, 0006
+universe members and price events).
 
 | Table | Holds |
 |---|---|
@@ -291,6 +295,8 @@ instrument seen dates, symbol reuse, symbol history and watchlist, 0005 BSE scri
 | `candles_intraday` | 1-minute bars only (start time in UTC) |
 | `ingestion_runs` | Every data-loading run: job, status, rows written, masked error |
 | `data_gaps` | Missing data found per instrument and interval, and how it was resolved |
+| `universe_members` | Which instruments belong to a named universe (`nifty500`, from the sector import), as of a date |
+| `price_events` | Suspected split/bonus days found in the candles (ratio); prices are never changed |
 | `llm_spend` | Every LLM call's cost; the view `v_llm_spend_monthly` sums it per IST month |
 
 Key rules:
@@ -604,6 +610,72 @@ Task 1.2b (decision 2026-11-22). Command: `market_intel.news company-fetch`
   something was fetched. Source health treats `google_news` as one source (all rules, plus
   `blocked`).
 
+## Upstox login and daily candles
+
+Sprint task S1 (decisions 2026-11-24). Commands: `market_intel.upstox` (`login`, `status`;
+logs to `logs/upstox.jsonl`) and `market_intel.candles daily` (`logs/candles.jsonl`).
+
+- **Login** (Upstox's authorization-code flow, checked 2026-11-24): `upstox login` opens
+  `https://api.upstox.com/v2/login/authorization/dialog` with `client_id`, `redirect_uri`,
+  `response_type=code` and a random `state`; the owner logs in on Upstox's own page (this code
+  never sees the password or TOTP, and never automates the page). A one-request server on
+  127.0.0.1 (the port and path of `UPSTOX_REDIRECT_URI`) waits at most 3 minutes for the
+  callback and checks `state`; otherwise the owner pastes the address from the browser bar. The
+  single-use code is exchanged at `/v2/login/authorization/token` (form body). The approve-on-
+  phone flow isn't used (it needs a public webhook). Refused on the `restricted` profile (R1).
+- **Token:** stored ONLY in the operating system's credential store (Windows Credential
+  Manager, via `keyring`, service `market-intel-upstox`). Non-secret metadata (`issued_at`,
+  `expires_at` = the next 03:30 IST, when Upstox tokens end) is in
+  `data/state/upstox_token.json`. The token is never printed or logged: it is added to log
+  masking as soon as it is loaded. `upstox status` shows valid / expired and the hours left.
+- **API client** (`UpstoxClient`): GET only (no order APIs), the Bearer token, the honest user
+  agent and the process-wide Upstox rate limiter (80% headroom, 429 back-off). HTTP 401 raises
+  `TokenExpired` ("run: upstox login") and queues one throttled WARNING alert "Upstox token
+  expired". Health's `upstox_token` check: OK while valid; WARN if missing, expired or under 1
+  hour left; SKIP while the upstox settings aren't set.
+- **Upstox candles** (`market_intel.sources.daily_candles`):
+  `GET /v3/historical-candle/{instrument_key}/days/1/{to}/{from}` (dates inclusive, at most one
+  decade per request, so ranges are split into 9-year chunks). Candles are
+  `[timestamp (+05:30), open, high, low, close, volume, oi]`; the IST date is the trade date.
+  Records: `source = "upstox"`, `price_basis = "raw"`.
+- **yfinance backup** (stocks only, `<SYMBOL>.NS`): used only when Upstox fails for an
+  instrument and range, or no valid token exists; `auto_adjust=False` (raw prices), `end`
+  exclusive. yfinance normally impersonates a browser; this project always passes its own
+  `requests` session with the honest user agent, so Yahoo may refuse it. After 5 failures in
+  a row it is switched off for the rest of the run. One request per 2 seconds. Indices load
+  from Upstox only.
+- **Loader** (`candles daily [--universe indices|nifty500|watchlist|all] [--from DATE]
+  [--symbol S] [--dry-run]`):
+  - **Universes:** `indices` = all active NSE indices; `nifty500` = `universe_members`
+    (written by the sector import: today's Nifty 500 list); `watchlist`; `all` = their union.
+    Nifty 50 is always loaded first: its candle days are the **trading calendar**.
+  - **Incremental:** from each instrument's last stored day + 1 up to the last trading day
+    (today after 18:00 IST, otherwise yesterday); `--from` also loads earlier history (an empty
+    instrument starts at 2015-01-01). Days stored from yfinance are asked from Upstox again
+    whenever a token exists.
+  - **Precedence:** one upsert per instrument; for the same day an `upstox` row may replace a
+    `yfinance` row, never the reverse; unchanged rows aren't rewritten (a rerun writes 0).
+  - **Gaps:** calendar days between an instrument's first candle and the last trading day
+    without a candle. Stocks first retry them with one yfinance request; what remains becomes
+    `data_gaps` rows (interval `1d`, one per run of missing days): `unfillable` once every
+    source available for the instrument has failed (stocks: Upstox and yfinance; indices:
+    Upstox), otherwise `open`. Open gaps are retried on the next run and become `filled` when
+    all their days are present.
+  - **Resumable:** `data/state/candles_progress.json` records the instruments finished for
+    the current target day; a rerun skips them, so an interrupted backfill continues.
+  - **Suspected split/bonus:** a day-over-day close ratio within 3% of 1/2, 1/3, 1/4, 1/5,
+    1/10, 2/3 or 4/5 while Nifty 50 moved less than 5% -> a `price_events` row
+    (`suspected_split_bonus`, the ratio). Prices are never changed; S2 excludes these days
+    from labels.
+  - **Runs:** one `ingestion_run(job="candles_daily", source="upstox")`; `rows_written` = rows
+    inserted or changed; `partial` if some instruments failed, `failed` if all did. Source
+    health: `upstox_candles` and `yfinance_candles` (one report per source per run:
+    instruments OK vs failed).
+- **Survivorship bias:** today's Nifty 500 is used for the whole history, so companies that
+  dropped out are missing and results look better than reality; model cards must say so.
+- **Exchange rematch:** `news rematch-exchange` sets stored exchange items' `symbols` again by
+  BSE code, then by name (only `symbols` changes, only where different).
+
 ## Health check
 
 `uv run python -m market_intel.health` runs every check and prints `STATUS | CHECK | MESSAGE`;
@@ -630,7 +702,7 @@ Data Health page (no secrets; hosts may appear).
 | `backup_age` | `full` profile only (SKIP otherwise). Age of the newest complete backup (one with a manifest) in `BACKUP_DIR`, from the manifest's timestamp; no database access. Older than `BACKUP_MAX_AGE_DAYS` (default 7), or no manifest or folder = WARN; never FAIL |
 | `data_freshness` | The latest `ingestion_runs` row. SKIP with no runs; WARN if the last run failed (a `partial` run is OK, with its status shown) |
 | `sources` | Source health (see [Source health](#source-health)). SKIP before any source was fetched; WARN while an enabled source has an active problem; otherwise OK |
-| `upstox_token` | SKIP until Phase 1 |
+| `upstox_token` | OK while today's Upstox token is valid; WARN if missing, expired or under 1 hour left; SKIP while the upstox settings aren't set |
 | `llm_spend` | This IST month's spend against `LLM_MONTHLY_CAP_INR`. WARN at `LLM_WARN_PCT`, FAIL at 100% |
 
 - **Isolation:** if a check crashes, only that check FAILs (masked message); the rest still
@@ -695,7 +767,7 @@ Data Health page (no secrets; hosts may appear).
   and `health --json` (no FAIL allowed). It runs only when a path in its filter changes:
   `docker/`, the `db`, `mongo` and `sources` packages, `db_check.py`, `health.py`,
   `ingestion.py`, `instruments.py`, `watchlist.py`, `news.py`, `source_health.py`,
-  `rate_limit.py`,
+  `rate_limit.py`, `candles.py`, `upstox.py`,
   `config/news_feeds.toml`, `mongo_setup.py`,
   `config.py`, `migrations/`, `alembic.ini`, `tests/integration/`, `pyproject.toml`, `uv.lock`
   and the workflow file.
@@ -717,7 +789,8 @@ Built as tasks 1.0 to 1.10 (see [progress](progress.md)). The groundwork from 1.
 in [Data sources, rate limits and ingestion runs](#data-sources-rate-limits-and-ingestion-runs);
 instruments and the watchlist (1.1) in [Instruments and watchlist](#instruments-and-watchlist);
 news (1.2) in [News and exchange feeds](#news-and-exchange-feeds),
-[Per-company news (Google News RSS)](#per-company-news-google-news-rss) (1.2b) and
+[Per-company news (Google News RSS)](#per-company-news-google-news-rss) (1.2b),
+[Upstox login and daily candles](#upstox-login-and-daily-candles) (S1) and
 [Source health](#source-health). What each factor is and when it's built:
 [factor map](factors.md).
 

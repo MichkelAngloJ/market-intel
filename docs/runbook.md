@@ -14,7 +14,10 @@ All commands run from `<repo folder>` with `uv run` in front.
    [Local Docker databases](#local-docker-databases)).
 4. `uv run python -m market_intel.health` and fix anything that isn't OK or SKIP (see
    [Reading the health output](#reading-the-health-output)).
-5. **Data (until the scheduler, 1.8, does it):** once a day after ~06:00 IST
+5. **Data (until the scheduler, S6, does it):** each morning
+   `uv run python -m market_intel.upstox login` (see
+   [Upstox login and daily candles](#upstox-login-and-daily-candles)); after 18:00 IST
+   `uv run python -m market_intel.candles daily`; once a day after ~06:00 IST
    `uv run python -m market_intel.instruments refresh` (see
    [Instruments and watchlist](#instruments-and-watchlist)); news whenever you like,
    `uv run python -m market_intel.news fetch` (see
@@ -80,6 +83,7 @@ needs a fix now.
 | `laptop` WARN / FAIL | Under 10 GB / 2 GB free disk | Free up space; check the size of `logs/` and `data/` |
 | `backup_age` WARN | The newest complete backup (with a manifest) is older than `BACKUP_MAX_AGE_DAYS` (default 7), or there is none | Run the backup: `uv run python -m market_intel.backup` (databases running), then copy `BACKUP_DIR` to external storage |
 | `data_freshness` WARN | The last ingestion run failed | Read its error in `ingestion_runs` and the logs (from Phase 1) |
+| `upstox_token` WARN | No Upstox login today, the token expired, or under 1 hour left | `uv run python -m market_intel.upstox login` |
 | `sources` WARN | A feed (or later another source) has an active source-health problem | Run `uv run python -m market_intel.news status`, then see [News feeds and source health](#news-feeds-and-source-health) |
 | `llm_spend` WARN / FAIL | Spend this IST month is at `LLM_WARN_PCT` / at the cap | Stop paid LLM calls; raising the cap needs a decision-log entry (rule R2) |
 
@@ -275,6 +279,8 @@ JSON object per line, times in UTC:
 | `market_intel.instruments` (refresh, sector import) | `logs/instruments.jsonl` |
 | `market_intel.watchlist` | `logs/watchlist.jsonl` (counts only, never symbols) |
 | `market_intel.news` (fetch, status) | `logs/news.jsonl` |
+| `market_intel.upstox` (login, status) | `logs/upstox.jsonl` (never the token) |
+| `market_intel.candles` | `logs/candles.jsonl` |
 | Code that names no component | `logs/market_intel.jsonl` |
 | Later Phase 1 jobs | `logs/<component>.jsonl`, named in each job's section |
 
@@ -355,6 +361,52 @@ Empty values never overwrite a sector, and stocks outside the Nifty 500 keep no 
 stock prints a risk note (trade-to-trade, often under exchange surveillance). The list lives
 only in the database: never copy it into the repo, the docs or a planner prompt that ends up in
 the repo. Choosing stocks is the owner's decision.
+
+## Upstox login and daily candles
+
+How it works: [architecture](architecture.md#upstox-login-and-daily-candles).
+
+| Task | Command |
+|---|---|
+| **Daily login** (each morning; the token ends at 03:30 IST) | `uv run python -m market_intel.upstox login` |
+| Is the token still valid? | `uv run python -m market_intel.upstox status` |
+| Daily candles, everything (incremental) | `uv run python -m market_intel.candles daily` |
+| History from 2015 for one universe | `uv run python -m market_intel.candles daily --universe nifty500 --from 2015-01-01` |
+| One stock or index | `uv run python -m market_intel.candles daily --symbol SYMBOL` |
+| See what would load, save nothing | `uv run python -m market_intel.candles daily --symbol SYMBOL --dry-run` |
+| Re-match stored exchange items (after new BSE codes) | `uv run python -m market_intel.news rematch-exchange --dry-run`, then without `--dry-run` |
+
+**The daily login.** Run `upstox login` in your own terminal. A browser opens Upstox's login
+page; log in there (your password and TOTP stay with Upstox). When the browser shows "Login
+received", the terminal prints how long the token is valid. If no browser opens or nothing
+happens within 3 minutes, copy the full address from the browser bar (it starts with your
+redirect address and contains `?code=`) and paste it when asked. The token is kept only in
+Windows Credential Manager (entry `market-intel-upstox`); it never appears on screen or in logs.
+
+**If the token expired** (alert "Upstox token expired", health `upstox_token` WARN, or "no valid
+Upstox token" in a command): run `upstox login` again, then rerun the command. Without a token
+the candle loader still loads stocks from yfinance (if Yahoo allows it) and skips indices;
+those days are asked from Upstox again after the next login, and Upstox rows replace yfinance
+rows.
+
+**Reading a candle run.** The summary shows instruments done / already done (resumed) / failed,
+rows written, requests per source and the duration, rows by source, gaps (open / filled /
+unfillable) and price events. A `partial` run names the failed instruments in
+`ingestion_runs.error`. An interrupted backfill continues where it stopped: just run the same
+command again.
+
+**Gaps.** `open`: days still missing, retried on the next run (usually filled after the next
+login). `unfillable`: every source failed for those days (often a trading suspension); nothing
+to do. To list them, with the app login:
+
+```sql
+SELECT i.symbol, g.gap_start, g.gap_end, g.status FROM data_gaps g
+JOIN instruments i ON i.id = g.instrument_id WHERE g.interval = '1d' AND g.status <> 'filled'
+ORDER BY g.gap_start DESC LIMIT 50;
+```
+
+**Price events.** `price_events` lists suspected split/bonus days (a sudden 1/2, 1/3, ... price
+jump while the market was still). Prices stay as they were; S2 leaves these days out of labels.
 
 ## News feeds and source health
 
