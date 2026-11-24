@@ -74,6 +74,7 @@ URL_USERINFO = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^\s/?#@]+@")
 _RESERVED_KEYS = {"event", "level", "logger", "timestamp", "exception"}
 
 _secret_values: tuple[str, ...] = ()
+_extra_secrets: tuple[str, ...] = ()  # registered at runtime (register_secret)
 _HANDLER_TAG = "_market_intel_handler"
 
 
@@ -92,6 +93,16 @@ def mask_text(text: str) -> str:
     for secret in _secret_values:  # longest first, so overlapping secrets mask fully
         text = text.replace(secret, MASK)
     return text
+
+
+def register_secret(value: str) -> None:
+    """Mask ``value`` in every log line and alert from now on (e.g. the Upstox access token,
+    which isn't a setting). Survives later ``configure_logging`` calls in this process."""
+    global _secret_values, _extra_secrets
+    if not value:
+        return
+    _extra_secrets = tuple(sorted({*_extra_secrets, value}, key=len, reverse=True))
+    _secret_values = tuple(sorted({*_secret_values, value}, key=len, reverse=True))
 
 
 def mask_value(value: Any, key: str | None = None) -> Any:
@@ -176,7 +187,9 @@ def configure_logging(
     """
     global _secret_values
     file_name = log_file_name(component)  # validate before touching anything
-    _secret_values = _collect_secrets(settings)
+    _secret_values = tuple(
+        sorted({*_collect_secrets(settings), *_extra_secrets}, key=len, reverse=True)
+    )
 
     reset_logging()
     settings.log_dir.mkdir(parents=True, exist_ok=True)

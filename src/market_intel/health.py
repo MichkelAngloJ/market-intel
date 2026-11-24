@@ -485,7 +485,20 @@ def check_sources(ctx: Context) -> CheckResult:
 
 
 def check_upstox_token(ctx: Context) -> CheckResult:
-    return CheckResult("upstox_token", "SKIP", "not set up (Phase 1)")
+    """OK while today's Upstox token is valid; WARN if missing, expired or under 1 hour left.
+    SKIP while the upstox settings aren't configured (or on the restricted profile)."""
+    from market_intel import upstox
+
+    settings = ctx.settings
+    if settings.app_profile == "restricted" or settings.missing("upstox"):
+        return CheckResult("upstox_token", "SKIP", "not set up (Phase 1)")
+    status = upstox.token_status(settings, ctx.now())
+    details = {"state": status.state, "hours_left": round(status.hours_left, 2)}
+    if not status.valid:
+        return CheckResult("upstox_token", "WARN", status.line(), details)
+    if status.hours_left < upstox.LOW_HOURS:
+        return CheckResult("upstox_token", "WARN", f"{status.line()}; log in again soon", details)
+    return CheckResult("upstox_token", "OK", status.line(), details)
 
 
 def check_llm_spend(ctx: Context) -> CheckResult:
