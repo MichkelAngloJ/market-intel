@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
+Last updated: 2026-11-24, HEAD 3e1262f. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -14,7 +14,8 @@ Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
   extras, 1.6b NSE files, 1.7 live feed + depth, 1.9 MCP, Phase 2 AI extraction
   (Ollama/FinBERT/OCR/page capture), LSTM, online learning, manipulation flags, IPO, mutual
   funds, agent.
-- Now: S1 (Upstox login + daily candles) in progress. 0.11 (remove the testing-laptop dependency) stays planned
+- Now: S1 (Upstox login + daily candles) done, awaiting planner review. Next: S2 (features
+  + labels + leakage test). 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -133,7 +134,8 @@ Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
 | 1.1 | done 2026-11-22 (HEAD c31dfe5) | passed (planner, 2026-11-22) | Instruments from Upstox's public NSE file (EQ, BE, indices) with conditional GET, size caps, safety valve and symbol history; sector import from the Nifty 500 list CSV; watchlist (max 50, database only); migration 0004; strict URL masking in logs; cloud MongoDB access decision logged |
 | 1.2 | done 2026-11-22 (HEAD 8317a95) | passed (planner, 2026-11-22) | 11 RSS feeds (6 news, 5 NSE/BSE) into `news_items` with `available_at`, dedupe and clear-match symbols; reusable source-health alerts and the `sources` health check; `partial` run status; factor map; spec, plan and five decisions |
 | 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | passed (planner, 2026-11-22) | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
-| S1 | in progress | – | Upstox login + daily candles (sprint task 1 of 6; deadline 27 Nov) |
+| S1 | done 2026-11-24 (HEAD 3e1262f) | awaiting planner review | Upstox browser login (token in Windows Credential Manager), status and health check; V3 daily candles with an honest-session yfinance backup; loader with precedence, gaps, resume and split/bonus flags; migration 0006 (universe members, price events); nifty500 universe; exchange rematch |
+| S2 | next | – | Features + labels + leakage test |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -154,6 +156,16 @@ Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S1 (2026-11-24): local databases at 0006. Sector import (real): matched 497, unmatched 4;
+  universe `nifty500` = 497 members. Upstox login done by the owner; token valid until
+  03:30 IST. Index backfill from 2015: 135 indices loaded, 4 BHARATBOND indices not served
+  by Upstox (UDAPI1021), 238,916 rows, 274 Upstox requests, 59 s. Nifty 500 backfill: 498
+  instruments, 1,150,524 rows (Upstox 1,149,499; yfinance 1,025 from 368 gap retries), 995
+  Upstox requests, 778 s. Incremental rerun: 1 request, 0 rows. Data 2015-01-01 to
+  2026-11-23: `candles_daily` 1,389,440 rows; 1840 unfillable gaps (1091 in bond indices;
+  617 of 749 stock gaps on two special weekend sessions); 156 suspected split/bonus events
+  in 92 stocks. Rematch: 0 changed (17 matched, 3 unmatched). Health overall OK (13 OK, 1
+  SKIP; `upstox_token` OK; `sources` 14 sources OK). Backup and `backup --verify` OK.
 - 1.2b (2026-11-22): local databases at migration 0005; `mongo_setup` applied (second run:
   nothing to change). `migrate-exchange-keys`: 20 updated, 0 conflicts; a second run 20
   unchanged. 2755 of 2963 active NSE stocks have a `bse_code`. First company-fetch: 11
@@ -178,9 +190,9 @@ Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
   databases and leave no rows (the instrument tests run in a transaction that is rolled back).
 - Commit-email guard active: the pre-commit hook blocks other emails; the CI test passes on
   the full history.
-- CI (run 44948320281) and compose-smoke (run 44948320314) green at fe3d7ea, the last 1.2b
-  code commit (0005 up, down and up; no drift; 41 integration tests); CI green at 7d7e9ac
-  (run 44948430921). The final commit's CI result is in the 1.2b report.
+- CI (run 45442061696) and compose-smoke (run 45442061602) green at 3e1262f, the last S1
+  code commit (0006 up, down and up; no drift; 44 integration tests). The final commit's
+  CI result is in the S1 report.
 
 ## Carry-forward items
 
@@ -202,6 +214,17 @@ Last updated: 2026-11-22, HEAD 7d7e9ac. Updated at the end of every task (see
   validator and indexes), then `news migrate-exchange-keys` if its database holds exchange
   items, before running the instruments refresh or any news fetch there.
 - Watchlist empty: company-fetch covers only recent filers until the owner adds stocks.
+- Daily: the owner runs `upstox login` each morning (token ends 03:30 IST); candles after
+  18:00 IST. Today's candle wasn't published by Upstox at 22:00 IST on 24 Nov (last stored
+  day 23 Nov); the next incremental run picks it up.
+- S2: exclude `price_events` days from labels; decide how to treat the special weekend
+  sessions in the trading calendar (Nifty 50 has them, most stocks don't); survivorship
+  bias of today's Nifty 500 goes into model cards.
+- yfinance by default impersonates a browser (curl_cffi); the project always passes an
+  honest `requests` session. Yahoo served it on 24 Nov; if Yahoo starts refusing, the
+  backup stops after 5 failures per run and source health reports it.
+- The 4 BHARATBOND indices aren't served by Upstox's historical API; decide whether to
+  drop them from the `indices` universe.
 - Google News is best effort: a block pauses it until the next IST day; repeated blocks
   over several days go to the planner. 57 of the first 84 company items were low
   confidence; Phase 2 checks them.
