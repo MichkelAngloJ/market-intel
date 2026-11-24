@@ -873,9 +873,12 @@ registry).
 - **The portfolio test (the honest one):** every 21 trading days (non-overlapping), the top
   K = 20 stocks by predicted probability (tie-break: predicted return), equal weight, enter at
   open(t+1), exit at close(t+21), after costs. A stock held again pays nothing; buys and sells
-  pay the costs below. A pick that can't be entered (no next-day open) earns 0, so nothing is
-  dropped with hindsight; returns across a suspected split/bonus are corrected by its recorded
-  ratio. Momentum and SMA use their own scores; the equal-weight universe holds every candidate.
+  pay the costs below. Prices are raw, so a stock-period is "unmeasurable" when there is no
+  next-day open, a suspected split/bonus in the window, or a raw 21-day move below -90% or above
+  +300% (most likely an unrecorded corporate action such as a consolidation): such a pick earns 0
+  for every strategy alike, and the report counts them. (A first run that corrected returns by
+  the recorded ratios produced impossible results, because some recorded events are not real
+  splits and consolidations aren't detected; see the S3 report.) Momentum and SMA use their own scores; the equal-weight universe holds every candidate.
   Reported: total and annual return, Sharpe (no risk-free rate), max drawdown, hit rate,
   turnover and costs paid. Per model, the same test runs on its own stocks with
   K = min(20, max(3, stocks / 3)). Starting capital Rs 10 lakh (fixed charges depend on it).
