@@ -319,3 +319,33 @@ labels_daily = Table(
         name="label_or_reason",
     ),
 )
+
+
+# --- model registry (0008, S3) -----------------------------------------------------------
+MODEL_STATUSES = ("candidate", "active", "retired")
+MODEL_KINDS = ("sector", "pooled")
+
+# One row per trained model version. Nothing becomes "active" without the owner.
+model_versions = Table(
+    "model_versions",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("name", Text, nullable=False),  # e.g. lgbm_21d_it, lgbm_21d_pooled
+    Column("version", Integer, nullable=False),
+    Column("horizon", Integer, nullable=False),
+    Column("sector", Text),  # NULL for the pooled model
+    Column("kind", Text, nullable=False),
+    Column("trained_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    Column("train_from", Date, nullable=False),
+    Column("train_to", Date, nullable=False),
+    Column("holdout_from", Date),
+    Column("metrics", JSONB, nullable=False),
+    Column("beats_baseline", Boolean, nullable=False),
+    Column("status", Text, nullable=False, server_default="candidate"),
+    Column("mlflow_run_id", Text),
+    Column("card_path", Text),
+    UniqueConstraint("name", "version"),
+    CheckConstraint(_in("status", MODEL_STATUSES), name="status"),
+    CheckConstraint(_in("kind", MODEL_KINDS), name="kind"),
+    CheckConstraint("version >= 1", name="version_positive"),
+)
