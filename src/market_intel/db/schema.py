@@ -21,6 +21,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     Date,
+    Float,
     ForeignKey,
     Identity,
     Index,
@@ -269,4 +270,52 @@ price_events = Table(
     Column("detected_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
     PrimaryKeyConstraint("instrument_id", "trade_date", "kind"),
     CheckConstraint(_in("kind", PRICE_EVENT_KINDS), name="kind"),
+)
+
+
+# --- features and labels (0007, S2) ------------------------------------------------------
+# Imported here so the table columns follow the one feature list.
+from market_intel.feature_spec import (  # noqa: E402
+    EXCLUDED_REASONS,
+    FEATURE_NAMES,
+    HORIZONS,
+)
+
+DOUBLE = Float(precision=53)
+
+# One row per instrument, trading day and feature version. Features for day t use only data
+# available at prediction_time(t) (08:30 IST on the next weekday); see market_intel.features.
+features_daily = Table(
+    "features_daily",
+    metadata,
+    Column("instrument_id", BigInteger, ForeignKey("instruments.id"), nullable=False),
+    Column("trade_date", Date, nullable=False),
+    Column("feature_version", Text, nullable=False),
+    Column("computed_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    *[Column(name, DOUBLE) for name in FEATURE_NAMES],
+    PrimaryKeyConstraint("instrument_id", "trade_date", "feature_version"),
+)
+
+# Labels: a SEPARATE table, so a feature row can never contain a label. fwd_return is NULL
+# (with a reason) when the window (t, t+h] can't give an honest label.
+labels_daily = Table(
+    "labels_daily",
+    metadata,
+    Column("instrument_id", BigInteger, ForeignKey("instruments.id"), nullable=False),
+    Column("trade_date", Date, nullable=False),
+    Column("horizon_days", Integer, nullable=False),
+    Column("fwd_return", DOUBLE),
+    Column("up", Boolean),
+    Column("excluded_reason", Text),
+    Column("computed_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    PrimaryKeyConstraint("instrument_id", "trade_date", "horizon_days"),
+    CheckConstraint(f"horizon_days IN ({', '.join(str(h) for h in HORIZONS)})", name="horizon"),
+    CheckConstraint(
+        "excluded_reason IS NULL OR " + _in("excluded_reason", EXCLUDED_REASONS), name="reason"
+    ),
+    CheckConstraint(
+        "(fwd_return IS NULL) = (excluded_reason IS NOT NULL)"
+        " AND (up IS NULL) = (fwd_return IS NULL)",
+        name="label_or_reason",
+    ),
 )
