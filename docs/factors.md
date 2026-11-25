@@ -16,17 +16,22 @@ Phase 3 measures the contributions per sector and stock with SHAP instead of ass
 
 ## Factors
 
-Status (2026-11-24): **built**: the sector map (1.1), news and exchange feeds (1.2),
+Status (2026-11-25): **built**: the sector map (1.1), news and exchange feeds (1.2),
 per-company news (1.2b), daily candles for all NSE indices and the Nifty 500 from 2015
 (S1), and features v1 built from them (S2: price and volume behaviour, overall market,
 sector relative strength, market mood from India VIX, calendar, liquidity, and news
-counts stored but not used for training yet). Everything else is still to come.
+counts stored but not used for training yet). **S4i** adds the intraday path: 1-minute
+candles from January 2022 for the Nifty 50 members, the Nifty 50 index, India VIX and the
+matching sector indices, and intraday features v1 and triple-barrier labels built from
+them (minute returns, VWAP, opening range, time-of-day volume, realised volatility,
+relative strength vs the index and the sector, VIX, the previous day, time of day and
+rule signals). Everything else is still to come.
 
 | Factor group | Examples | Matters most for | Free source | Built in |
 |---|---|---|---|---|
-| Overall market | Nifty, global markets, breadth | intraday, days | Upstox index candles (daily: built in S1) | S1, 1.5–1.6 |
-| Sector | sector index, peer moves | days–weeks | sector map + equal-weight sector return from our candles (built in S2) | 1.1, S2 |
-| Price and volume behaviour | trend, momentum, gaps, 52-week high, volatility | minutes to months | candles (daily: built in S1) | S1, S2, 1.5 |
+| Overall market | Nifty, global markets, breadth | intraday, days | Upstox index candles (daily: built in S1; 1-minute: S4i) | S1, S4i, 1.5–1.6 |
+| Sector | sector index, peer moves | minutes–weeks | sector map + equal-weight sector return from our candles (built in S2) + NSE sector index minute candles (S4i) | 1.1, S2, S4i |
+| Price and volume behaviour | trend, momentum, gaps, 52-week high, volatility | minutes to months | candles (daily: built in S1; 1-minute: S4i) | S1, S2, S4i, 1.5 |
 | Delivery % | real buying vs same-day churn | days; pump detection | NSE daily bhavcopy | 1.6b |
 | Order book | buy/sell imbalance, large orders | minutes | Upstox live feed (recorded from 1.7; no history exists) | 1.7 |
 | Results | surprise, margins, guidance | days around results; months | NSE/BSE results feeds + filing PDFs | 1.2, Phase 2 |
@@ -36,10 +41,10 @@ counts stored but not used for training yet). Everything else is still to come.
 | Fundamentals and valuation | P/E, debt, ROE, cash flow | months–years | filings | Phase 2 |
 | Macro and policy | RBI rates, inflation, budget, policy, crude, USD-INR | days–months | macro data + news | 1.6 |
 | Global and geopolitics | war, US Fed, commodities | days | news + global indices | 1.2, 1.6 |
-| Market mood | India VIX, risk-on/off | all horizons | Upstox (India VIX level and change: built in S2) | S2, 1.6 |
+| Market mood | India VIX, risk-on/off | all horizons | Upstox (India VIX level and change: built in S2; 1-minute level: S4i) | S2, S4i, 1.6 |
 | News and sentiment | tone, surprise, amount of coverage | hours–days | RSS feeds (1.2) + per-company news from Google News RSS for the watchlist and recent filers (1.2b) + FinBERT/LLM | 1.2, 1.2b, Phase 2 |
 | Surveillance risk | ASM/GSM lists, circuit limits, series BE | small caps | NSE lists; series BE | 1.6b, Phase 5 |
-| Calendar | results season, F&O expiry week, budget day | days | exchange calendar (day of week, month: built in S2) | S2, Phase 2 |
+| Calendar | results season, F&O expiry week, budget day | days | exchange calendar (day of week, month: built in S2; minutes since the open and day of week intraday: S4i) | S2, S4i, Phase 2 |
 | Liquidity | traded value, bid-ask spread | all (costs, slippage) | candles (20-day traded value: built in S2), order book | S2, 4 |
 
 Every factor is used with its **available_at** time (when this system could know it), never
