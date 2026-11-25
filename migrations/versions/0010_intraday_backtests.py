@@ -114,18 +114,18 @@ def upgrade() -> None:
         op.f("ix_backtest_trades_run_id"), "backtest_trades", ["run_id", "trade_date"], unique=False
     )
 
-    op.drop_constraint("ck_model_versions_kind", "model_versions", type_="check")
+    op.drop_constraint(op.f("ck_model_versions_kind"), "model_versions", type_="check")
     op.create_check_constraint(
-        "ck_model_versions_kind",
+        op.f("ck_model_versions_kind"),
         "model_versions",
         "kind IN ('sector', 'pooled', 'intraday')",
     )
 
 
 def downgrade() -> None:
-    op.drop_constraint("ck_model_versions_kind", "model_versions", type_="check")
+    op.drop_constraint(op.f("ck_model_versions_kind"), "model_versions", type_="check")
     op.create_check_constraint(
-        "ck_model_versions_kind", "model_versions", "kind IN ('sector', 'pooled')"
+        op.f("ck_model_versions_kind"), "model_versions", "kind IN ('sector', 'pooled')"
     )
     op.drop_index(op.f("ix_backtest_trades_run_id"), table_name="backtest_trades")
     op.drop_table("backtest_trades")

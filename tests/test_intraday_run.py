@@ -11,7 +11,7 @@ import pytest
 
 from market_intel import intraday as I
 from market_intel import intraday_run as R
-from market_intel.config import ConfigError, get_settings
+from market_intel.config import ConfigError, Settings
 
 
 class StubConn:
@@ -58,7 +58,9 @@ class StubConn:
 def built(tmp_path_factory):
     """Build features and both label versions from synthetic bars into a temp DATA_DIR."""
     data_dir = tmp_path_factory.mktemp("data")
-    settings = get_settings().model_copy(update={"data_dir": data_dir})
+    # built explicitly: this fixture is module-scoped, so it runs before the autouse
+    # environment isolation and must not depend on any .env file
+    settings = Settings(_env_file=None, app_profile="restricted", data_dir=str(data_dir))
     inputs = fakes.inputs(40)
     features, v1, v2 = [], [], []
     for inst in inputs.bars:
