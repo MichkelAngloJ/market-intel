@@ -472,6 +472,7 @@ def check_sources(ctx: Context) -> CheckResult:
     enabled = [f.source for f in load_feeds(settings.news_feeds_file) if f.enabled]
     enabled.append("google_news")
     enabled += ["upstox_candles", "yfinance_candles"]  # daily candles (S1)
+    enabled.append("upstox_intraday")  # 1-minute candles (S4i)
     seen = [name for name in enabled if name in state]
     if not seen:
         return CheckResult("sources", "SKIP", "no source fetched yet")

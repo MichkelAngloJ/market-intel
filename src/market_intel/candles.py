@@ -799,6 +799,13 @@ def main(argv: list[str] | None = None) -> int:
         "special-sessions", help="list special sessions and delete their gap rows"
     )
     special.add_argument("--dry-run", action="store_true", help="count only, delete nothing")
+    intraday = sub.add_parser("intraday", help="load 1-minute candles from Upstox (S4i)")
+    intraday.add_argument("--universe", default="nifty50")
+    intraday.add_argument(
+        "--from", dest="start_from", type=date.fromisoformat, default=date(2022, 1, 1)
+    )
+    intraday.add_argument("--symbol", help="only this instrument (symbol)")
+    intraday.add_argument("--dry-run", action="store_true", help="fetch, save nothing")
     args = parser.parse_args(argv)
     try:
         settings = get_settings()
@@ -808,6 +815,20 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(settings, COMPONENT)
     with bound_context(run_id=new_run_id(), component=COMPONENT):
         try:
+            if args.command == "intraday":
+                from market_intel.intraday_candles import run_intraday
+
+                with postgres.connect(settings.require("database")) as conn:
+                    result = run_intraday(
+                        settings,
+                        conn,
+                        universe=args.universe,
+                        start=args.start_from,
+                        symbol=args.symbol,
+                        dry_run=args.dry_run,
+                    )
+                print("\n".join(result.lines()))
+                return 0 if result.status != "failed" else 1
             if args.command == "special-sessions":
                 with postgres.connect(settings.require("database")) as conn:
                     days = special_sessions(conn)
@@ -828,6 +849,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Failed: {exc}", file=sys.stderr)
             return 1
         except ConfigError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        except upstox.UpstoxError as exc:  # intraday: no valid token, or every instrument failed
             print(f"Error: {exc}", file=sys.stderr)
             return 1
     return 0
