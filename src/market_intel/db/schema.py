@@ -349,3 +349,26 @@ model_versions = Table(
     CheckConstraint(_in("kind", MODEL_KINDS), name="kind"),
     CheckConstraint("version >= 1", name="version_positive"),
 )
+
+
+# --- builds of file-based datasets (0009, S4i) -------------------------------------------
+BUILD_KINDS = ("intraday_features", "intraday_labels")
+
+# One row per build of a Parquet dataset under DATA_DIR (the files themselves are never
+# committed): what was built, for which dates, and the SHA-256 of every file.
+feature_builds = Table(
+    "feature_builds",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("kind", Text, nullable=False),
+    Column("version", Text, nullable=False),
+    Column("from_date", Date, nullable=False),
+    Column("to_date", Date, nullable=False),
+    Column("rows", BigInteger, nullable=False),
+    Column("files", Integer, nullable=False),
+    Column("sha256", JSONB, nullable=False),  # {relative path: sha256}
+    Column("built_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    CheckConstraint(_in("kind", BUILD_KINDS), name="kind"),
+    CheckConstraint("rows >= 0 AND files >= 0", name="counts_non_negative"),
+    CheckConstraint("to_date >= from_date", name="date_order"),
+)
