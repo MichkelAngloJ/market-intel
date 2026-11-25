@@ -48,13 +48,19 @@ class BacktestReport:
     def lines(self) -> list[str]:
         out = [*B.report_table(self.results), ""]
         if self.sensitivity:
-            out.append("net profit (Rs) by slippage per side, best strategy of each run:")
-            out.append(f"  {'slippage':<12} {'best strategy':<22} {'net Rs':>12} {'trades':>8}")
+            out.append(
+                "by slippage per side (best per-trade edge of each run; the account return"
+                " saturates once a run is ruined):"
+            )
+            out.append(
+                f"  {'slippage':<12} {'best strategy':<22} {'edge bps':>9} {'net Rs':>12}"
+                f" {'trades':>8}"
+            )
             for bps in sorted(self.sensitivity):
                 row = self.sensitivity[bps]
                 out.append(
-                    f"  {bps:>5.0f} bps    {row['name']:<22} {row['net_profit']:>12,.0f}"
-                    f" {int(row['trades']):>8,}"
+                    f"  {bps:>5.0f} bps    {row['name']:<22} {row['edge_bps']:>+9.2f}"
+                    f" {row['net_profit']:>12,.0f} {int(row['trades']):>8,}"
                 )
             out.append("")
         if self.note:
@@ -135,13 +141,14 @@ def run_backtest(
                 report.results.append(result)
                 if save:
                     B.save(conn, result)
-            if best is None or result.net_profit > best.net_profit:
+            if best is None or (result.edge_bps or -1e9) > (best.edge_bps or -1e9):
                 best = result
         if best is not None:
             report.sensitivity[bps] = {
                 "name": best.name,
                 "net_profit": best.net_profit,
                 "trades": len(best.trades),
+                "edge_bps": best.edge_bps or 0.0,
             }
     nothing = B.no_trading(
         capital,

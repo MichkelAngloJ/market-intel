@@ -313,3 +313,22 @@ def test_an_empty_frame_gives_an_empty_result():
     assert result.trades == [] and result.days == 0
     assert result.equity_curve.empty and result.max_drawdown_pct == 0
     assert np.isclose(result.return_pct, 0.0)
+
+
+def test_the_per_trade_edge_is_independent_of_capital_and_size():
+    """Account return saturates at the ruin floor; the per-trade edge does not."""
+    rows = frame(row(60, ret=0.005, bars=1), row(70, outcome=-1, ret=-0.0025, bars=1))
+    small = run(rows, policy=SizingPolicy(capital=100_000))
+    large = run(rows, policy=SizingPolicy(capital=10_000_000))
+    assert small.edge_bps == pytest.approx(large.edge_bps, rel=1e-9)
+    # +50 bps then -25 bps, with no costs, averages +12.5 bps a trade
+    assert small.edge_bps == pytest.approx(12.5)
+    assert run(frame(row(60, signal=0))).edge_bps is None
+
+
+def test_costs_show_up_in_the_per_trade_edge():
+    rows = frame(row(60, ret=0.005, bars=1))
+    free = run(rows)
+    charged = run(rows, costs=IntradayCostModel(), slippage_bps=10)
+    assert free.edge_bps == pytest.approx(50.0)
+    assert charged.edge_bps < free.edge_bps - 20  # 10 bps a side plus the charges

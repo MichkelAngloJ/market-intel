@@ -103,6 +103,22 @@ class BacktestResult:
         return 100 * self.net_profit / self.capital
 
     @property
+    def edge_bps(self) -> float | None:
+        """Average net result per trade, in basis points of the position traded.
+
+        The account return saturates once a run is ruined, so every losing strategy looks
+        alike. This does not: it is the per-trade edge after costs, independent of capital,
+        position size and how long the account survived.
+        """
+        if not self.trades:
+            return None
+        return (
+            10_000
+            * sum(t.net_profit / (t.entry * t.quantity) for t in self.trades)
+            / len(self.trades)
+        )
+
+    @property
     def equity_curve(self) -> pd.Series:
         """Capital at the end of each day that the backtest covered."""
         if not self.daily_profit:
@@ -150,15 +166,16 @@ class BacktestResult:
             "sharpe": self.sharpe,
             "days": self.days,
             "days_without_trade": self.days_without_trade,
-            "params": self.params,
+            "params": {**self.params, "edge_bps": self.edge_bps, "ruined": self.ruined},
         }
 
     def line(self) -> str:
         hit = f"{self.hit_rate:.0%}" if self.hit_rate is not None else "-"
         sharpe = f"{self.sharpe:+.2f}" if self.sharpe is not None else "-"
+        edge = f"{self.edge_bps:+.2f}" if self.edge_bps is not None else "-"
         return (
             f"{self.name:<22} {self.variant or self.label_version:<8} {len(self.trades):>7,}"
-            f" {hit:>6} {self.net_profit:>13,.0f} {self.return_pct:>8.1f}%"
+            f" {hit:>6} {edge:>9} {self.net_profit:>13,.0f} {self.return_pct:>8.1f}%"
             f" {self.max_drawdown_pct:>8.1f}% {sharpe:>7}"
             f" {100 * self.days_without_trade / max(self.days, 1):>7.0f}%"
             + ("  RUINED" if self.ruined else "")
@@ -166,8 +183,8 @@ class BacktestResult:
 
 
 HEADER = (
-    f"{'strategy':<22} {'labels':<8} {'trades':>7} {'hit':>6} {'net Rs':>13} {'return':>9}"
-    f" {'maxDD':>9} {'Sharpe':>7} {'no-trade':>8}"
+    f"{'strategy':<22} {'labels':<8} {'trades':>7} {'hit':>6} {'edge bps':>9} {'net Rs':>13}"
+    f" {'return':>9} {'maxDD':>9} {'Sharpe':>7} {'no-trade':>8}"
 )
 
 
@@ -470,5 +487,5 @@ def save(conn: Any, result: BacktestResult, *, with_trades: bool = True) -> int:
 
 def report_table(results: Sequence[BacktestResult]) -> list[str]:
     """The comparison table: every strategy and model next to every baseline."""
-    ordered = sorted(results, key=lambda r: (-r.net_profit, r.name))
+    ordered = sorted(results, key=lambda r: (-(r.edge_bps or 0.0), -r.net_profit, r.name))
     return [HEADER, "-" * len(HEADER), *[r.line() for r in ordered]]
