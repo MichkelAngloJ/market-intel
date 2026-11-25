@@ -108,6 +108,21 @@ class OutcomeOdds:
     def p_time(self) -> float:
         return max(0.0, 1.0 - self.target - self.p_stop)
 
+    def with_target(self, target: float) -> OutcomeOdds:
+        """These odds re-pointed at a model's P(target first).
+
+        The model only predicts the target, so the remaining probability is split between the
+        stop and the time limit in the same proportion as these (historical) odds. Simply
+        keeping the old ``stop`` would let the two add to more than 1.
+        """
+        rest = self.p_stop + self.p_time
+        share = self.p_stop / rest if rest > 0 else 1.0
+        return OutcomeOdds(
+            target=target,
+            stop=(1.0 - target) * share,
+            time_limit_return=self.time_limit_return,
+        )
+
 
 @dataclass(frozen=True)
 class TradePlan:

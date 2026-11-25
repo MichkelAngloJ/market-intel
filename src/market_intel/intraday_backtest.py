@@ -333,7 +333,11 @@ def simulate(
             probability = getattr(row, "probability", None)
             odds = (odds_by_side or {}).get(side)
             if probability is not None and not pd.isna(probability):
-                odds = OutcomeOdds(target=float(probability), stop=odds.p_stop if odds else None)
+                odds = (
+                    odds.with_target(float(probability))
+                    if odds is not None
+                    else OutcomeOdds(target=float(probability))
+                )
             plan = plan_intraday_trade(
                 str(getattr(row, "symbol", row.instrument_id)),
                 side,

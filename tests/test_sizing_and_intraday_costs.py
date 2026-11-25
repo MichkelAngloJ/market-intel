@@ -214,3 +214,24 @@ def test_ipo_applications_are_whole_lots():
     assert ipo_lots(50_000, 14_800.0) == 3
     assert ipo_lots(14_800, 14_800.0) == 1
     assert ipo_lots(10_000, 14_800.0) == 0
+
+
+def test_a_models_target_probability_rescales_the_rest():
+    """The model predicts only the target, so the rest keeps the historical stop-to-time mix."""
+    historical = OutcomeOdds(target=0.3, stop=0.5)  # 20% time out
+    moved = historical.with_target(0.8)
+    assert moved.target == pytest.approx(0.8)
+    assert moved.p_stop == pytest.approx(0.2 * 0.5 / 0.7)  # the stop's share of the remainder
+    assert moved.p_time == pytest.approx(0.2 * 0.2 / 0.7)
+    assert moved.target + moved.p_stop + moved.p_time == pytest.approx(1.0)
+    # a confident model plus a high historical stop rate used to add to more than 1
+    OutcomeOdds(target=0.3, stop=0.68).with_target(0.9)
+
+
+def test_rescaling_odds_that_never_time_out():
+    assert OutcomeOdds(target=0.3).with_target(0.75).p_stop == pytest.approx(0.25)
+
+
+def test_rescaling_keeps_the_time_limit_return():
+    odds = OutcomeOdds(target=0.2, stop=0.4, time_limit_return=0.003)
+    assert odds.with_target(0.6).time_limit_return == pytest.approx(0.003)
