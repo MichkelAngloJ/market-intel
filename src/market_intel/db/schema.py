@@ -323,7 +323,7 @@ labels_daily = Table(
 
 # --- model registry (0008, S3) -----------------------------------------------------------
 MODEL_STATUSES = ("candidate", "active", "retired")
-MODEL_KINDS = ("sector", "pooled")
+MODEL_KINDS = ("sector", "pooled", "intraday")  # intraday added in 0010 (S5i)
 
 # One row per trained model version. Nothing becomes "active" without the owner.
 model_versions = Table(
@@ -332,6 +332,7 @@ model_versions = Table(
     Column("id", BigInteger, Identity(), primary_key=True),
     Column("name", Text, nullable=False),  # e.g. lgbm_21d_it, lgbm_21d_pooled
     Column("version", Integer, nullable=False),
+    # trading days for a daily model; one-minute bars for kind = intraday (S5i)
     Column("horizon", Integer, nullable=False),
     Column("sector", Text),  # NULL for the pooled model
     Column("kind", Text, nullable=False),

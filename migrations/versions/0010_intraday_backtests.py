@@ -7,6 +7,8 @@ Create Date: 2026-11-25
 - backtest_runs: one row per backtest of a rule strategy, a baseline or a model, with the
   capital, the slippage assumed, and the result after every charge.
 - backtest_trades: every simulated trade of a run, so a result can be checked trade by trade.
+- model_versions.kind gains 'intraday' (one model per side over intraday features; its
+  horizon column counts one-minute bars rather than trading days).
 
 Nothing in these tables is a real order: the project never places any.
 
@@ -112,8 +114,19 @@ def upgrade() -> None:
         op.f("ix_backtest_trades_run_id"), "backtest_trades", ["run_id", "trade_date"], unique=False
     )
 
+    op.drop_constraint("ck_model_versions_kind", "model_versions", type_="check")
+    op.create_check_constraint(
+        "ck_model_versions_kind",
+        "model_versions",
+        "kind IN ('sector', 'pooled', 'intraday')",
+    )
+
 
 def downgrade() -> None:
+    op.drop_constraint("ck_model_versions_kind", "model_versions", type_="check")
+    op.create_check_constraint(
+        "ck_model_versions_kind", "model_versions", "kind IN ('sector', 'pooled')"
+    )
     op.drop_index(op.f("ix_backtest_trades_run_id"), table_name="backtest_trades")
     op.drop_table("backtest_trades")
     op.drop_index(op.f("ix_backtest_runs_kind"), table_name="backtest_runs")

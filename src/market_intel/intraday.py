@@ -38,12 +38,14 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from market_intel import intraday_backtest
 from market_intel.config import ConfigError, Settings, get_settings
 from market_intel.db import postgres
 from market_intel.ingestion import ingestion_run
 from market_intel.logging_setup import bound_context, configure_logging, get_logger, new_run_id
 
 COMPONENT = "intraday"
+DEFAULT_CAPITAL = 100_000.0
 VERSION = "v1"
 LABEL_VERSIONS = ("v1", "v2")  # v2 = volatility-scaled barriers (S5i)
 IST = ZoneInfo("Asia/Kolkata")
@@ -1005,6 +1007,43 @@ class BuildSummary:
         return out
 
 
+def built_root(settings: Settings, kind: str, version: str) -> Path:
+    tree = "features" if kind == "intraday_features" else "labels"
+    return settings.data_dir / tree / "intraday" / version
+
+
+def load_built(
+    settings: Settings,
+    kind: str,
+    version: str = VERSION,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+    columns: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    """Read a built Parquet dataset back, optionally only the months that overlap start..end."""
+    root = built_root(settings, kind, version)
+    if not root.exists():
+        raise ConfigError(f"nothing built yet at {root.name}: run the build first")
+    frames = []
+    for path in sorted(root.rglob("*.parquet")):
+        year = int(path.parent.parent.name.split("=")[1])
+        month = int(path.parent.name.split("=")[1])
+        first, last = date(year, month, 1), month_end(date(year, month, 1))
+        if (start and last < start) or (end and first > end):
+            continue
+        frames.append(pd.read_parquet(path, columns=list(columns) if columns else None))
+    if not frames:
+        raise ConfigError(f"no months of {kind} {version} in the requested range")
+    out = pd.concat(frames, ignore_index=True)
+    out["trade_date"] = pd.to_datetime(out["trade_date"]).dt.date
+    if start:
+        out = out[out["trade_date"] >= start]
+    if end:
+        out = out[out["trade_date"] <= end]
+    return out.reset_index(drop=True)
+
+
 def last_build_to(conn: Any, kind: str, version: str) -> date | None:
     row = conn.execute(
         "SELECT max(to_date) FROM feature_builds WHERE kind = %s AND version = %s", (kind, version)
@@ -1205,27 +1244,65 @@ def check_real(
 # --- entry point -------------------------------------------------------------------------
 
 
+def _month(text: str) -> date:
+    """A --from / --to value: YYYY-MM (the first of that month) or a full date."""
+    return date.fromisoformat(text if len(text) > 7 else text + "-01")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for ``python -m market_intel.intraday``."""
     parser = argparse.ArgumentParser(prog="python -m market_intel.intraday")
     sub = parser.add_subparsers(dest="group", required=True)
     feats = sub.add_parser("features", help="intraday features")
     feats.add_argument("action", choices=["build"])
-    feats.add_argument(
-        "--from", dest="start", type=lambda s: date.fromisoformat(s if len(s) > 7 else s + "-01")
-    )
+    feats.add_argument("--from", dest="start", type=_month)
     feats.add_argument("--version", default=VERSION)
     feats.add_argument("--universe", default="nifty50")
     labels = sub.add_parser("labels", help="triple-barrier labels")
     labels.add_argument("action", choices=["build"])
     labels.add_argument("--version", default=VERSION, choices=list(LABEL_VERSIONS))
-    labels.add_argument(
-        "--from", dest="start", type=lambda s: date.fromisoformat(s if len(s) > 7 else s + "-01")
-    )
+    labels.add_argument("--from", dest="start", type=_month)
     labels.add_argument("--universe", default="nifty50")
     leak = sub.add_parser("check-leakage", help="the intraday leakage test on stored candles")
     leak.add_argument("--sample", type=int, default=200)
     leak.add_argument("--universe", default="nifty50")
+
+    def dates(target: Any) -> None:
+        target.add_argument("--from", dest="start", type=_month)
+        target.add_argument("--to", dest="end", type=_month)
+
+    back = sub.add_parser("backtest", help="rule strategies against the baselines, after costs")
+    dates(back)
+    back.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
+    back.add_argument("--labels", dest="label_version", default="v2", choices=list(LABEL_VERSIONS))
+    back.add_argument("--variant", default="k15_b10", choices=sorted(VARIANT_BY_NAME))
+    back.add_argument("--slippage", type=float, default=None, help="bps per side for the headline")
+    back.add_argument("--no-save", action="store_true", help="do not write backtest_runs")
+
+    train = sub.add_parser("train", help="the LightGBM meta-model, walk-forward then holdout")
+    dates(train)
+    train.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
+    train.add_argument("--labels", dest="label_version", default="v2", choices=list(LABEL_VERSIONS))
+    train.add_argument("--variant", default="k15_b10", choices=sorted(VARIANT_BY_NAME))
+    train.add_argument("--window-months", type=int, default=12)
+    train.add_argument("--holdout-months", type=int, default=3)
+    train.add_argument("--max-train-rows", type=int, default=500_000)
+    train.add_argument("--no-mlflow", action="store_true")
+    train.add_argument("--no-save", action="store_true")
+
+    shown = sub.add_parser("report", help="the backtests stored so far")
+    shown.add_argument("--limit", type=int, default=40)
+
+    replay = sub.add_parser("replay", help="step through one past day and show the trade plans")
+    replay.add_argument("--date", dest="day", type=date.fromisoformat, required=True)
+    replay.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
+    replay.add_argument("--strategy", default="orb_15")
+    replay.add_argument(
+        "--labels", dest="label_version", default="v2", choices=list(LABEL_VERSIONS)
+    )
+    replay.add_argument("--variant", default="k15_b10", choices=sorted(VARIANT_BY_NAME))
+    replay.add_argument("--universe", default="nifty50")
+
     args = parser.parse_args(argv)
     try:
         settings = get_settings()
@@ -1258,6 +1335,81 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         run.add_rows(summary.rows)
                     print("\n".join(summary.lines()))
+                elif args.group == "backtest":
+                    from market_intel import intraday_run
+
+                    out = intraday_run.run_backtest(
+                        settings,
+                        conn,
+                        capital=args.capital,
+                        label_version=args.label_version,
+                        variant=args.variant,
+                        start=args.start,
+                        end=args.end,
+                        headline_slippage=(
+                            args.slippage
+                            if args.slippage is not None
+                            else intraday_run.HEADLINE_SLIPPAGE
+                        ),
+                        save=not args.no_save,
+                        progress=lambda m: print(f"  {m} ...", flush=True),
+                    )
+                    print("\n".join(out.lines()))
+                elif args.group == "train":
+                    from market_intel import intraday_models, intraday_run
+
+                    config = intraday_models.TrainConfig(
+                        label_version=args.label_version,
+                        variant=args.variant,
+                        window_months=args.window_months,
+                        holdout_months=args.holdout_months,
+                        max_train_rows=args.max_train_rows,
+                    )
+                    with ingestion_run(
+                        settings,
+                        "intraday_train",
+                        source="intraday_features",
+                        params={"variant": args.variant, "labels": args.label_version},
+                    ) as run:
+                        result, runs, registered = intraday_run.run_train(
+                            settings,
+                            conn,
+                            capital=args.capital,
+                            config=config,
+                            use_mlflow=not args.no_mlflow,
+                            save=not args.no_save,
+                            start=args.start,
+                            end=args.end,
+                            progress=lambda m: print(f"  {m} ...", flush=True),
+                        )
+                        run.add_rows(len(result.predictions))
+                    print("\n".join(result.lines()))
+                    if runs:
+                        print()
+                        print("\n".join(intraday_backtest.report_table(runs)))
+                    for row in registered:
+                        print(f"  registered {row['name']} v{row['version']} (candidate)")
+                elif args.group == "report":
+                    from market_intel import intraday_run
+
+                    print("\n".join(intraday_run.run_report(conn, limit=args.limit)))
+                elif args.group == "replay":
+                    from market_intel import intraday_run
+
+                    print(
+                        "\n".join(
+                            intraday_run.run_replay(
+                                settings,
+                                conn,
+                                day=args.day,
+                                capital=args.capital,
+                                strategy=args.strategy,
+                                label_version=args.label_version,
+                                variant=args.variant,
+                                universe=args.universe,
+                            )
+                        )
+                    )
                 else:
                     t0 = time_mod.monotonic()
                     report, total = check_real(conn, args.sample, universe=args.universe)
