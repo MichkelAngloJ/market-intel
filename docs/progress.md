@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
+Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -21,8 +21,9 @@ Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
 - Now: S5i (intraday strategies, ML meta-model, backtest after costs, capital sizing, replay
-  demo) in progress. 0.11 (remove the testing-laptop dependency) stays planned for not
-  before 2026-12-03.
+  demo) done, awaiting planner review. Next: S6 (mutual funds: AMFI NAV, ranking, "how sure"
+  history stats, split calculator with minimums, keep/exit flags). 0.11 (remove the
+  testing-laptop dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
   News RSS for the watchlist, polite rate); 1.3 Upstox login and token; 1.4 daily candles
@@ -175,7 +176,7 @@ Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
 | S2 | done 2026-11-24 (HEAD e91fb33) | passed (planner, 2026-11-24) | Timing convention; features v1 (32, news not for training) and separate forward labels (21/63/126 days, exclusion reasons) with migration 0007; leakage test (truncation, late news, label names, shifted data) in CI and on real data; special sessions out of the gap and label calendar; BHARATBOND out of indices; yfinance curl-cffi off |
 | S3 | done 2026-11-25 (HEAD c472d0a) | passed as engineering (planner, 2026-11-25) | Baselines + per-sector LightGBM (pooled fallback), walk-forward after costs, SHAP, MLflow, model registry (migration 0008); the models do NOT beat the baselines |
 | S4i | done 2026-11-25 (HEAD 55bedc8) | passed (planner, 2026-11-25) | 1-minute candles for the nifty50 universe, the Nifty 50, India VIX and 12 sector indices from 2022 (resumable, one month per request, thin days); the intraday timing convention; features v1 (41) and long/short triple-barrier labels as monthly Parquet with build records (migration 0009); the intraday leakage test (5 checks, 4 leaky fakes) in CI and on real data |
-| S5i | in progress | – | Intraday strategies, ML meta-model, backtest after costs, capital sizing, replay demo |
+| S5i | done 2026-11-25 (HEAD ad735f5) | awaiting planner review | Labels v2 (ATR-scaled barriers, 3x3 grid) with its own leakage check; 8 rule strategies with mood and no-trade filters; intraday charges (official rates) and the shared capital-sizing component; event-driven backtest after costs with migration 0010 (backtest_runs, backtest_trades, model kind 'intraday'); LightGBM meta-model per side (monthly walk-forward, holdout scored once); backtest / train / report / replay commands. NOTHING beats `no_trading` |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -196,6 +197,20 @@ Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S5i (2026-11-25): local databases at 0010. Labels v2: 8,031,544 rows in 59 Parquet files,
+  571 MB, 29 min; the barrier mix is now balanced (long k15_b10: target first 27.4%, stop
+  first 64.4%, time limit 8.1%, average gross -0.0037%; short 31.2% / 59.9% / 8.8%,
+  +0.0040%), against v1's 5.5 / 24.7 / 69.8. Excluded: no_atr 2,581, thin_day 2,850,
+  price_event 402, no_entry 55. Backtest (capital Rs 100,000, 5 bps slippage a side, 1,210
+  days): all 8 rule strategies lose 23-25 bps per trade after costs and every one of them
+  ruined the account (-75%); `no_trading` wins. At ZERO slippage the best rule still loses
+  12.55 bps per trade while charges alone are about 8.3 bps, so the signals' own gross edge
+  is roughly -4 bps. Meta-model (110 monthly folds, 19.5 min): walk-forward AUC 0.532 both
+  sides, holdout 0.513 (long) and 0.529 (short); its backtest took 167 trades (32% hit,
+  -18.79 bps, -29.1%) - better than the rules only because the expected-value gate trades 4x
+  less often, and still negative. The holdout produced ONE trade, which is no evidence
+  either way. Both sides registered as `candidate`; nothing promoted. Health overall OK;
+  backup 687.3 MB in 1 min 56 s, restore test OK in 2 min 24 s.
 - S4i (2026-11-25): local databases at 0009. Nifty 50 import: 50 matched, 0 unmatched.
   1-minute candles 2022-01-01 to 2026-11-24 for 64 instruments (50 stocks, Nifty 50, India
   VIX, 12 sector indices): 28,349,007 rows, 3,472 requests, 63 min, 11,656 bars dropped
@@ -288,10 +303,24 @@ Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
   day 23 Nov); the next incremental run picks it up.
 - S4: the models don't beat the baselines after costs; nothing may become `active`. Paper
   trading may run on the candidates to collect outcomes, clearly labelled as such.
-- S5i: with a 0.5% target and a 0.25% stop over 15 bars, about 70% of intraday decision
-  points reach neither barrier and the target is hit only ~5% of the time; both sides average
-  about zero gross return. Volatility-scaled barriers (and a shorter time limit) are worth
-  testing before any strategy is built on these labels.
+- S6 and after: intraday does NOT pay on this evidence. Eight rule strategies and a LightGBM
+  meta-model all lose after costs on 2022-2026 Nifty 50 minute data, and the rules lose even
+  with zero slippage. Nothing may be promoted or paper-traded as if it worked. What is NOT
+  ruled out: a different instrument set (index options or futures, where the cost per unit of
+  movement is far lower), a longer intraday horizon, or using the model only as a veto on
+  rules rather than a signal of its own.
+- Costs decide intraday: an intraday round trip costs about 0.13% of the position in charges
+  alone (0.083% at a Rs 100,000 position, where the Rs 20 brokerage cap binds). A Nifty 50
+  stock rarely moves that far in 15 minutes, which is most of the reason nothing works.
+- Intraday (MIS) leverage is NOT modelled: the exposure cap is one times capital, so a 0.25%
+  stop risks about 0.25% of capital rather than the nominal 1%. Real MIS margin would change
+  the sizing (and the losses) substantially.
+- The IPFT charge is ambiguous on Upstox's own pages (Rs 0.01 per crore in one table,
+  Rs 0.10 per lakh in another, and a note that it is now folded into the transaction charge).
+  It is treated as included; at the larger figure it would add about 3% to the charges on a
+  round trip.
+- model_versions.horizon counts trading days for a daily model and one-minute bars for
+  kind = 'intraday'. Worth splitting if a third kind of horizon ever appears.
 - Intraday price events: a split/bonus day is detected from that day's close, so it cannot be
   a feature at a decision point during the day. The event day and the next trading day are
   excluded from the labels instead, and only the previous day's event is a feature.
