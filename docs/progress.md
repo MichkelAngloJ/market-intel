@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
+Last updated: 2026-11-26, HEAD 23dde7a. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -20,10 +20,11 @@ Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S5i-b (longer intraday hold, confidence calibration, plain-percentage reporting) in
-  progress. Next: a wider, more volatile universe (a separate task), then S6 (mutual funds:
-  AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
-  flags). 0.11 (remove the testing-laptop dependency) stays planned for not before 2026-12-03.
+- Now: S5i-b (longer intraday hold, confidence calibration, plain-percentage reporting) done,
+  awaiting planner review. Next: a wider, more volatile universe (a separate task), then S6
+  (mutual funds: AMFI NAV, ranking, "how sure" history stats, split calculator with minimums,
+  keep/exit flags). 0.11 (remove the testing-laptop dependency) stays planned for not before
+  2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
   News RSS for the watchlist, polite rate); 1.3 Upstox login and token; 1.4 daily candles
@@ -183,7 +184,7 @@ Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
 | S3 | done 2026-11-25 (HEAD c472d0a) | passed as engineering (planner, 2026-11-25) | Baselines + per-sector LightGBM (pooled fallback), walk-forward after costs, SHAP, MLflow, model registry (migration 0008); the models do NOT beat the baselines |
 | S4i | done 2026-11-25 (HEAD 55bedc8) | passed (planner, 2026-11-25) | 1-minute candles for the nifty50 universe, the Nifty 50, India VIX and 12 sector indices from 2022 (resumable, one month per request, thin days); the intraday timing convention; features v1 (41) and long/short triple-barrier labels as monthly Parquet with build records (migration 0009); the intraday leakage test (5 checks, 4 leaky fakes) in CI and on real data |
 | S5i | done 2026-11-25 (HEAD ad735f5) | passed (planner, 2026-11-25) | Labels v2 (ATR-scaled barriers, 3x3 grid) with its own leakage check; 8 rule strategies with mood and no-trade filters; intraday charges (official rates) and the shared capital-sizing component; event-driven backtest after costs with migration 0010 (backtest_runs, backtest_trades, model kind 'intraday'); LightGBM meta-model per side (monthly walk-forward, holdout scored once); backtest / train / report / replay commands. NOTHING beats `no_trading` |
-| S5i-b | in progress | - | Longer intraday hold (labels v3), confidence calibration and precision, plain-percentage reporting |
+| S5i-b | done 2026-11-26 (HEAD 23dde7a) | awaiting planner review | Labels v3 (ATR barriers held 30 / 60 bars or to the close) with the ATR invariant checked separately; `intraday precision` (probability deciles and the top 10/5/1% most-confident signals with their net result after costs); plain-percentage reporting against `no_trading`. BOTH questions answered NO: holding longer does not beat the fee, and no confidence band is profitable |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -204,6 +205,27 @@ Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S5i-b (2026-11-26): local databases at 0010 (no migration). Labels v3: 8,031,544 rows in
+  59 Parquet files, 549 MB, 48 min; check-leakage --labels v3 on real data PASS (500 samples,
+  418 s).
+  (a) Does holding longer help? NO. With an ATR-scaled barrier one side is almost always hit
+  within 30 bars, so the time-limit outcome falls to about 0% and the 30-bar, 60-bar and
+  hold-to-close results are nearly identical. Long k=1.5: target first rises 27.4% (15 bars)
+  to 31.3% (to the close) while the average gross return stays at -0.0037% / -0.0038%; the
+  extra wins are the former time-limit exits turning into stops. The v3 backtest matches the
+  v2 one to a hundredth of a basis point (best edge -12.51 vs -12.55 bps at zero slippage,
+  -22.95 vs -23.12 at 5 bps); all eight strategies still ruined the account.
+  (b) Are the most-confident signals profitable? NO. Walk-forward, long side: the actual
+  target-first rate rises monotonically across deciles (28.2% to 34.2%), so the ranking is
+  real, but it is worth about 1.2 bps a trade against an 18.26 bps round trip. The model is
+  badly overconfident where it matters: decile 10 says 42.6% and delivers 34.2%, and the top
+  1% says 57.5% and delivers 33.6%. The top 1% is no better than the top 10% (gross +0.19 vs
+  +0.25 bps for longs, +0.66 vs +0.90 for shorts), so the extreme tail is noise, not
+  concentrated edge. Every confidence band loses money after costs, on the walk-forward and
+  on the holdout (187,600 scored rows, so the holdout IS evidence here: the `one trade` of
+  S5i was the EV-gated backtest, while `precision` scores every row). Replay of 2026-11-23:
+  5 trades on Rs 496,750 of traded value, price moved 0.252% of it, charges took 0.183% of
+  it, net -0.711% of capital. Health overall OK; backup 687.4 MB, restore test OK.
 - S5i (2026-11-25): local databases at 0010. Labels v2: 8,031,544 rows in 59 Parquet files,
   571 MB, 29 min; the barrier mix is now balanced (long k15_b10: target first 27.4%, stop
   first 64.4%, time limit 8.1%, average gross -0.0037%; short 31.2% / 59.9% / 8.8%,
@@ -310,6 +332,23 @@ Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
   day 23 Nov); the next incremental run picks it up.
 - S4: the models don't beat the baselines after costs; nothing may become `active`. Paper
   trading may run on the candidates to collect outcomes, clearly labelled as such.
+- Intraday is now measured out on large-cap cash equity: no rule and no model beats
+  `no_trading` at any slippage down to zero, at any hold from 5 bars to the session close,
+  and in no confidence band including the model's most confident 1%. The gross edge is under
+  1 basis point a trade against an 18 basis point round trip. What this does NOT rule out is
+  a different instrument set (index options or futures, where the cost per unit of movement
+  is far lower) or a wider, more volatile universe - the next task - for which every tool
+  built here (labels, strategies, backtest, calibration, percentage reporting) is reusable
+  unchanged.
+- The model is overconfident, not merely weak: its ranking is sound but its stated
+  probabilities are far too high at the top, which the expected-value gate trusts. Any later
+  use of the probability should calibrate it (isotonic or Platt) on the walk-forward first.
+- `intraday precision` retrains the whole walk-forward (about 20 minutes) because the
+  walk-forward probabilities are not stored, only the fitted models. If this analysis is run
+  often, cache the probabilities to Parquet beside the labels.
+- Shorts beat longs consistently across every barrier variant on 2022-2026 Nifty 50 minute
+  data (for example +0.0046% against -0.0038% average gross at k=1.5 held to the close).
+  Still far below costs, but a real asymmetry worth a look if intraday is revisited.
 - S6 and after: intraday does NOT pay on this evidence. Eight rule strategies and a LightGBM
   meta-model all lose after costs on 2022-2026 Nifty 50 minute data, and the rules lose even
   with zero slippage. Nothing may be promoted or paper-traded as if it worked. What is NOT
