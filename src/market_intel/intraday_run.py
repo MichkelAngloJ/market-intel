@@ -136,7 +136,13 @@ def run_backtest(
                 "net_profit": best.net_profit,
                 "trades": len(best.trades),
             }
-    nothing = B.no_trading(capital, days, period=period)
+    nothing = B.no_trading(
+        capital,
+        days,
+        period=period,
+        from_date=features["trade_date"].min(),
+        to_date=features["trade_date"].max(),
+    )
     report.results.append(nothing)
     if save:
         B.save(conn, nothing)

@@ -171,8 +171,19 @@ HEADER = (
 )
 
 
-def no_trading(capital: float, days: int, period: str = "walk_forward") -> BacktestResult:
-    """The baseline that does nothing: no trades, no costs, no loss."""
+def no_trading(
+    capital: float,
+    days: int,
+    period: str = "walk_forward",
+    *,
+    from_date: date | None = None,
+    to_date: date | None = None,
+) -> BacktestResult:
+    """The baseline that does nothing: no trades, no costs, no loss.
+
+    It still records the period it covered, so it can be compared with the runs it is the
+    yardstick for.
+    """
     return BacktestResult(
         name="no_trading",
         kind="baseline",
@@ -181,6 +192,8 @@ def no_trading(capital: float, days: int, period: str = "walk_forward") -> Backt
         period=period,
         capital=capital,
         slippage_bps=0.0,
+        from_date=from_date,
+        to_date=to_date,
         days=days,
         days_without_trade=days,
     )
@@ -405,6 +418,10 @@ def save(conn: Any, result: BacktestResult, *, with_trades: bool = True) -> int:
     import json
 
     row = result.row()
+    if row["from_date"] is None or row["to_date"] is None:
+        raise ValueError(
+            f"backtest {result.name!r} has no date range: it cannot be stored or compared"
+        )
     run_id = conn.execute(
         "INSERT INTO backtest_runs (kind, name, label_version, variant, period, from_date,"
         " to_date, capital, slippage_bps, trades, hit_rate, net_profit, costs_paid, return_pct,"

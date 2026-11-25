@@ -151,13 +151,24 @@ def test_the_model_registry_accepts_the_intraday_kind(conn):
 
 def test_an_empty_result_still_stores_a_row(conn):
     """ "No trading" is a baseline and must be recorded like any other."""
-    run_id = B.save(conn, B.no_trading(capital=100_000, days=20))
+    run_id = B.save(
+        conn,
+        B.no_trading(
+            capital=100_000, days=20, from_date=date(2024, 3, 1), to_date=date(2024, 3, 28)
+        ),
+    )
     stored = conn.execute(
         "SELECT kind, name, trades, net_profit, days_without_trade FROM backtest_runs"
         " WHERE id = %s",
         (run_id,),
     ).fetchone()
     assert stored == ("baseline", "no_trading", 0, 0.00, 20)
+
+
+def test_a_run_without_a_date_range_is_refused_before_the_database(conn):
+    """A run that does not know its own period cannot be compared with anything."""
+    with pytest.raises(ValueError, match="no date range"):
+        B.save(conn, B.no_trading(capital=100_000, days=20))
 
 
 def test_a_simulated_run_round_trips_through_the_database(conn, instrument):
