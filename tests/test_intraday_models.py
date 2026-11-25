@@ -316,3 +316,133 @@ def test_an_empty_prediction_set_gives_an_empty_report():
     report = M.precision_report(pd.DataFrame(), pd.DataFrame(), capital=100_000)
     assert report.calibration == {} and report.tops == {}
     assert "calibration" in report.lines()[0]
+
+
+# --- probability calibration and the prediction cache (S5i-c) --------------------------------
+
+
+def overconfident(n: int = 4_000, seed: int = 3) -> pd.DataFrame:
+    """Predictions that rank correctly but overstate the probability, as S5i-b found."""
+    rng = np.random.default_rng(seed)
+    raw = rng.uniform(0.05, 0.95, n)
+    true = raw * 0.6  # the real rate is well below what the model says
+    return pd.DataFrame(
+        {
+            "instrument_id": 1,
+            "ts": pd.date_range("2024-03-05", periods=n, freq="5min", tz="UTC"),
+            "trade_date": date(2024, 3, 5),
+            "minute": 60,
+            "side": "long",
+            "probability": raw,
+            "y": (rng.uniform(size=n) < true).astype("int8"),
+        }
+    )
+
+
+def test_calibration_error_measures_the_gap_between_said_and_happened():
+    frame = overconfident()
+    error = M.calibration_error(frame)
+    assert error > 0.15  # badly overconfident by construction
+    honest = frame.assign(probability=frame["y"].astype(float) * 0.9 + 0.05)
+    assert M.calibration_error(honest) < error
+
+
+def test_isotonic_calibration_fixes_the_level_without_changing_the_order():
+    frame = overconfident()
+    calibrator = M.fit_calibrator(frame)
+    assert calibrator is not None
+    fixed = calibrator.apply(frame["probability"].to_numpy())
+    before = M.calibration_error(frame)
+    after = M.calibration_error(frame.assign(probability=fixed))
+    assert after < before / 2  # the level is repaired
+    # isotonic is monotone non-decreasing: it can never put a lower raw probability above a
+    # higher one. It CAN flatten a range into one value, which creates ties, so the AUC may
+    # give up a little to those ties but cannot fall apart.
+    order = np.argsort(frame["probability"].to_numpy(), kind="stable")
+    assert np.all(np.diff(fixed[order]) >= -1e-12)
+    auc_raw = M._auc(frame["y"].to_numpy(), frame["probability"].to_numpy())
+    auc_fixed = M._auc(frame["y"].to_numpy(), fixed)
+    assert auc_fixed == pytest.approx(auc_raw, abs=0.02)
+
+
+def test_a_calibrator_needs_enough_rows_and_both_outcomes():
+    frame = overconfident(n=100)
+    assert M.fit_calibrator(frame, min_rows=500) is None
+    one_class = overconfident(n=1_000).assign(y=1)
+    assert M.fit_calibrator(one_class) is None
+
+
+def test_calibrate_adds_the_columns_and_leaves_the_raw_one(trained):
+    import copy
+
+    result = copy.copy(trained)
+    result.predictions = trained.predictions.copy()
+    result.holdout_predictions = trained.holdout_predictions.copy()
+    fitted = M.calibrate(result, min_rows=100)
+    assert set(fitted) <= set(M.SIDES) and fitted
+    for frame in (result.predictions, result.holdout_predictions):
+        assert "probability_raw" in frame and "probability_calibrated" in frame
+        assert frame["probability_calibrated"].between(0, 1).all()
+    # the holdout is calibrated with the walk-forward's mapping, never fitted on itself
+    assert all(c.rows <= len(result.predictions) for c in fitted.values())
+
+
+def test_the_calibrated_probability_is_what_callers_get(trained):
+    import copy
+
+    result = copy.copy(trained)
+    result.predictions = trained.predictions.copy()
+    result.holdout_predictions = trained.holdout_predictions.copy()
+    M.calibrate(result, min_rows=100)
+    handed = M.probabilities_for(result)
+    expected = result.predictions["probability_calibrated"].to_numpy()
+    assert handed["probability"].to_numpy() == pytest.approx(expected)
+    raw = M.probabilities_for(result, calibrated=False)
+    assert raw["probability"].to_numpy() == pytest.approx(
+        result.predictions["probability"].to_numpy()
+    )
+
+
+def test_the_calibration_report_shows_before_and_after(trained):
+    import copy
+
+    result = copy.copy(trained)
+    result.predictions = trained.predictions.copy()
+    result.holdout_predictions = trained.holdout_predictions.copy()
+    M.calibrate(result, min_rows=100)
+    text = "\n".join(M.calibration_lines(result))
+    assert "isotonic, fitted on the walk-forward only" in text
+    assert "->" in text and "top 1% said" in text
+
+
+def test_predictions_round_trip_through_the_cache(trained, tmp_path):
+    import copy
+
+    from market_intel.config import Settings
+
+    settings = Settings(_env_file=None, app_profile="restricted", data_dir=str(tmp_path))
+    result = copy.copy(trained)
+    result.predictions = trained.predictions.copy()
+    result.holdout_predictions = trained.holdout_predictions.copy()
+    M.calibrate(result, min_rows=100)
+    written = M.save_predictions(settings, result, universe="zztest", config=trained.config)
+    assert written and all(p.exists() for p in written)
+    back = M.load_predictions(
+        settings, universe="zztest", version=trained.config.label_version,
+        variant=trained.config.variant,
+    )  # fmt: skip
+    assert len(back) == len(result.predictions)
+    assert "probability_calibrated" in back
+    assert isinstance(back["trade_date"].iloc[0], date)
+    holdout = M.load_predictions(
+        settings, universe="zztest", version=trained.config.label_version,
+        variant=trained.config.variant, holdout=True,
+    )  # fmt: skip
+    assert len(holdout) == len(result.holdout_predictions)
+
+
+def test_a_missing_cache_reads_as_empty(tmp_path):
+    from market_intel.config import Settings
+
+    settings = Settings(_env_file=None, app_profile="restricted", data_dir=str(tmp_path))
+    assert M.load_predictions(settings, universe="nope", version="v2", variant="k15_b10").empty

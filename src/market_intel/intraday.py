@@ -38,6 +38,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from market_intel import universe
 from market_intel.config import ConfigError, Settings, get_settings
 from market_intel.db import postgres
 from market_intel.ingestion import ingestion_run
@@ -969,11 +970,10 @@ def load_inputs(
     )
 
 
-def month_dir(settings: Settings, kind: str, version: str, month: date) -> Path:
-    tree = "features" if kind == "intraday_features" else "labels"
-    return (
-        settings.data_dir / tree / "intraday" / version / f"year={month:%Y}" / f"month={month:%m}"
-    )
+def month_dir(
+    settings: Settings, kind: str, version: str, month: date, universe: str = "nifty50"
+) -> Path:
+    return built_root(settings, kind, version, universe) / f"year={month:%Y}" / f"month={month:%m}"
 
 
 def sha256(path: Path) -> str:
@@ -1041,9 +1041,11 @@ class BuildSummary:
         return out
 
 
-def built_root(settings: Settings, kind: str, version: str) -> Path:
+def built_root(settings: Settings, kind: str, version: str, universe: str = "nifty50") -> Path:
+    """Where a built dataset lives. The universe is part of the path, so building one universe
+    can never overwrite another's months (S5i-c)."""
     tree = "features" if kind == "intraday_features" else "labels"
-    return settings.data_dir / tree / "intraday" / version
+    return settings.data_dir / tree / "intraday" / universe / version
 
 
 def load_built(
@@ -1051,12 +1053,13 @@ def load_built(
     kind: str,
     version: str = VERSION,
     *,
+    universe: str = "nifty50",
     start: date | None = None,
     end: date | None = None,
     columns: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """Read a built Parquet dataset back, optionally only the months that overlap start..end."""
-    root = built_root(settings, kind, version)
+    root = built_root(settings, kind, version, universe)
     if not root.exists():
         raise ConfigError(f"nothing built yet at {root.name}: run the build first")
     frames = []
@@ -1159,7 +1162,7 @@ def build(
                 f = f.reset_index(names="ts") if kind == "intraday_features" else f
                 f.insert(0, "instrument_id", inst)
                 parts.append(f)
-        folder = month_dir(settings, kind, version, month)
+        folder = month_dir(settings, kind, version, month, universe)
         for old in folder.glob("*.parquet") if folder.exists() else []:
             old.unlink()
         if not parts:
@@ -1245,13 +1248,8 @@ def build(
                 "rows": m["rows"],
             }
     summary.bytes_on_disk = sum(
-        p.stat().st_size
-        for p in (
-            settings.data_dir
-            / ("features" if kind == "intraday_features" else "labels")
-            / "intraday"
-            / version
-        ).rglob("*.parquet")
+        path.stat().st_size
+        for path in built_root(settings, kind, version, universe).rglob("*.parquet")
     )
     summary.seconds = time_mod.monotonic() - t0
     return summary
@@ -1322,6 +1320,7 @@ def main(argv: list[str] | None = None) -> int:
     back = sub.add_parser("backtest", help="rule strategies against the baselines, after costs")
     dates(back)
     back.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
+    back.add_argument("--universe", default="nifty50")
     back.add_argument("--labels", dest="label_version", default="v2", choices=list(LABEL_VERSIONS))
     back.add_argument("--variant", default="k15_b10", choices=sorted(VARIANT_BY_NAME))
     back.add_argument("--slippage", type=float, default=None, help="bps per side for the headline")
@@ -1330,6 +1329,7 @@ def main(argv: list[str] | None = None) -> int:
     train = sub.add_parser("train", help="the LightGBM meta-model, walk-forward then holdout")
     dates(train)
     train.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
+    train.add_argument("--universe", default="nifty50")
     train.add_argument("--labels", dest="label_version", default="v2", choices=list(LABEL_VERSIONS))
     train.add_argument("--variant", default="k15_b10", choices=sorted(VARIANT_BY_NAME))
     train.add_argument("--window-months", type=int, default=12)
@@ -1344,6 +1344,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     dates(precision)
     precision.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
+    precision.add_argument("--universe", default="nifty50")
+    precision.add_argument("--retrain", action="store_true", help="ignore the cache")
     precision.add_argument(
         "--labels", dest="label_version", default="v2", choices=list(ATR_LABEL_VERSIONS)
     )
@@ -1352,6 +1354,18 @@ def main(argv: list[str] | None = None) -> int:
     precision.add_argument("--holdout-months", type=int, default=3)
     precision.add_argument("--max-train-rows", type=int, default=500_000)
     precision.add_argument("--min-train-rows", type=int, default=20_000)
+
+    pick = sub.add_parser(
+        "select-universe", help="choose a liquid, volatile intraday universe from daily candles"
+    )
+    pick.add_argument("--name", required=True)
+    pick.add_argument("--size", type=int, default=universe.DEFAULT_SIZE)
+    pick.add_argument("--source", default=universe.DEFAULT_SOURCE)
+    pick.add_argument("--lookback-days", type=int, default=universe.DEFAULT_LOOKBACK_DAYS)
+    pick.add_argument(
+        "--min-turnover-crore", type=float, default=universe.DEFAULT_MIN_TURNOVER / universe.CRORE
+    )
+    pick.add_argument("--dry-run", action="store_true")
 
     shown = sub.add_parser("report", help="the backtests stored so far")
     shown.add_argument("--limit", type=int, default=40)
@@ -1409,6 +1423,7 @@ def main(argv: list[str] | None = None) -> int:
                     out = intraday_run.run_backtest(
                         settings,
                         conn,
+                        universe=args.universe,
                         capital=args.capital,
                         label_version=args.label_version,
                         variant=args.variant,
@@ -1443,6 +1458,7 @@ def main(argv: list[str] | None = None) -> int:
                         result, runs, registered = intraday_run.run_train(
                             settings,
                             conn,
+                            universe=args.universe,
                             capital=args.capital,
                             config=config,
                             use_mlflow=not args.no_mlflow,
@@ -1453,6 +1469,8 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         run.add_rows(len(result.predictions))
                     print("\n".join(result.lines()))
+                    print()
+                    print("\n".join(intraday_models.calibration_lines(result)))
                     if runs:
                         print()
                         print("\n".join(intraday_backtest.report_table(runs)))
@@ -1466,6 +1484,8 @@ def main(argv: list[str] | None = None) -> int:
                             intraday_run.run_precision(
                                 settings,
                                 conn,
+                                universe=args.universe,
+                                retrain=args.retrain,
                                 capital=args.capital,
                                 config=intraday_models.TrainConfig(
                                     label_version=args.label_version,
@@ -1481,6 +1501,17 @@ def main(argv: list[str] | None = None) -> int:
                             )
                         )
                     )
+                elif args.group == "select-universe":
+                    plan = universe.run_select(
+                        conn,
+                        name=args.name,
+                        size=args.size,
+                        source=args.source,
+                        lookback_days=args.lookback_days,
+                        min_turnover=args.min_turnover_crore * universe.CRORE,
+                        dry_run=args.dry_run,
+                    )
+                    print("\n".join(plan.lines()))
                 elif args.group == "report":
                     from market_intel import intraday_run
 

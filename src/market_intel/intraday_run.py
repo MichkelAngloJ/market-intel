@@ -74,10 +74,18 @@ def _policy(capital: float, **kw: Any) -> SizingPolicy:
 
 
 def _load(
-    settings: Settings, label_version: str, start: date | None, end: date | None
+    settings: Settings,
+    label_version: str,
+    start: date | None,
+    end: date | None,
+    universe: str = "nifty50",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    features = I.load_built(settings, "intraday_features", I.VERSION, start=start, end=end)
-    labels = I.load_built(settings, "intraday_labels", label_version, start=start, end=end)
+    features = I.load_built(
+        settings, "intraday_features", I.VERSION, universe=universe, start=start, end=end
+    )
+    labels = I.load_built(
+        settings, "intraday_labels", label_version, universe=universe, start=start, end=end
+    )
     return features, labels
 
 
@@ -85,6 +93,7 @@ def run_backtest(
     settings: Settings,
     conn: Any,
     *,
+    universe: str = "nifty50",
     capital: float = DEFAULT_CAPITAL,
     label_version: str = "v2",
     variant: str = "k15_b10",
@@ -99,7 +108,7 @@ def run_backtest(
     """Every rule strategy against every baseline, after costs, at several slippage levels."""
     t0 = time_mod.monotonic()
     progress("loading features and labels")
-    features, labels = _load(settings, label_version, start, end)
+    features, labels = _load(settings, label_version, start, end, universe)
     signals = S.all_signals(features)
     report = BacktestReport()
     days = features["trade_date"].nunique()
@@ -135,7 +144,11 @@ def run_backtest(
                 costs=DEFAULT_INTRADAY_COSTS,
                 slippage_bps=bps,
                 period=period,
-                params={"rule": strategy.description, "slippage_bps": bps},
+                params={
+                    "rule": strategy.description,
+                    "slippage_bps": bps,
+                    "universe": universe,
+                },
             )
             if bps == headline_slippage:
                 report.results.append(result)
@@ -180,6 +193,7 @@ def run_train(
     settings: Settings,
     conn: Any,
     *,
+    universe: str = "nifty50",
     capital: float = DEFAULT_CAPITAL,
     label_version: str = "v2",
     variant: str = "k15_b10",
@@ -194,12 +208,17 @@ def run_train(
     """Train the meta-model, then backtest its walk-forward and holdout probabilities."""
     config = config or M.TrainConfig(label_version=label_version, variant=variant)
     progress("loading features and labels")
-    features, labels = _load(settings, config.label_version, start, end)
+    features, labels = _load(settings, config.label_version, start, end, universe)
     signals = S.all_signals(features)
     dataset = M.build_dataset(features, labels, signals, config)
     if dataset.empty:
         raise ConfigError("no usable rows: build the features and labels first")
     result = M.run_training(dataset, config, progress=progress)
+    # calibrate before anything uses the probability: S5i-b showed the raw numbers are badly
+    # overconfident at the top, and the expected-value gate trusts them directly
+    M.calibrate(result)
+    if save:
+        M.save_predictions(settings, result, universe=universe, config=config)
     odds = {
         side: OutcomeOdds(
             target=rate["target"], stop=rate["stop"], time_limit_return=rate["time_limit_return"]
@@ -228,7 +247,12 @@ def run_train(
             period="holdout" if holdout else "walk_forward",
             ev_gate=True,
             odds_by_side=odds,
-            params={"model": "lgbm_intraday", "slippage_bps": slippage_bps},
+            params={
+                "model": "lgbm_intraday",
+                "slippage_bps": slippage_bps,
+                "universe": universe,
+                "calibrated": True,
+            },
         )
         runs.append(simulated)
         if save:
@@ -248,10 +272,20 @@ def _as_backtest_rows(rows: pd.DataFrame, config: M.TrainConfig) -> pd.DataFrame
     return out
 
 
+def _cached_probabilities(frame: pd.DataFrame) -> pd.DataFrame:
+    """A cached predictions frame as the calibrated (probability, side, key) a report wants."""
+    if frame.empty:
+        return frame
+    column = "probability_calibrated" if "probability_calibrated" in frame else "probability"
+    out = frame[["instrument_id", "ts", "side", column]].copy()
+    return out.rename(columns={column: "probability"})
+
+
 def run_precision(
     settings: Settings,
     conn: Any,
     *,
+    universe: str = "nifty50",
     capital: float = DEFAULT_CAPITAL,
     label_version: str = "v2",
     variant: str = "k15_b10",
@@ -259,31 +293,59 @@ def run_precision(
     end: date | None = None,
     config: M.TrainConfig | None = None,
     slippage_bps: float = HEADLINE_SLIPPAGE,
+    retrain: bool = False,
     progress: Any = lambda message: None,
 ) -> list[str]:
-    """Train (walk-forward) and ask whether the model's confidence means anything.
+    """Ask whether the model's confidence means anything, reusing the cached probabilities.
 
-    Nothing is stored and no model is registered: this describes a training run so the owner
-    can see whether the strongest "yes" signals pay for themselves.
+    `train` caches its walk-forward and holdout probabilities, so this normally costs seconds.
+    With ``retrain`` (or no cache) it trains the walk-forward again, which takes much longer.
+    No model is registered: this describes a training run so the owner can see whether the
+    strongest "yes" signals pay for themselves.
     """
     config = config or M.TrainConfig(label_version=label_version, variant=variant)
     progress("loading features and labels")
-    features, labels = _load(settings, config.label_version, start, end)
+    features, labels = _load(settings, config.label_version, start, end, universe)
     signals = S.all_signals(features)
     dataset = M.build_dataset(features, labels, signals, config)
     if dataset.empty:
         raise ConfigError("no usable rows: build the features and labels first")
-    result = M.run_training(dataset, config, progress=progress)
-    out = list(result.lines())
+    cached = M.load_predictions(
+        settings, universe=universe, version=config.label_version, variant=config.variant
+    )
+    out: list[str] = []
+    if cached.empty or retrain:
+        progress("no cached probabilities: training the walk-forward")
+        result = M.run_training(dataset, config, progress=progress)
+        M.calibrate(result)
+        M.save_predictions(settings, result, universe=universe, config=config)
+        walk_probabilities = M.probabilities_for(result)
+        holdout = M.probabilities_for(result, holdout=True)
+        out += list(result.lines()) + [""] + M.calibration_lines(result)
+    else:
+        progress(f"using {len(cached):,} cached walk-forward probabilities")
+        walk_probabilities = _cached_probabilities(cached)
+        holdout = _cached_probabilities(
+            M.load_predictions(
+                settings,
+                universe=universe,
+                version=config.label_version,
+                variant=config.variant,
+                holdout=True,
+            )
+        )
+        out += [
+            f"cached probabilities for {universe} {config.label_version} {config.variant}:"
+            f" {len(cached):,} walk-forward rows, {len(holdout):,} holdout rows"
+        ]
     walk = M.precision_report(
         dataset,
-        M.probabilities_for(result),
+        walk_probabilities,
         capital=capital,
         slippage_bps=slippage_bps,
         period="walk_forward",
     )
     out += [""] + walk.lines()
-    holdout = M.probabilities_for(result, holdout=True)
     if not holdout.empty:
         note = ""
         if len(holdout) < 2000:

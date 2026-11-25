@@ -96,6 +96,7 @@ class TrainResult:
     predictions: pd.DataFrame = field(default_factory=pd.DataFrame)  # walk-forward
     holdout_predictions: pd.DataFrame = field(default_factory=pd.DataFrame)
     final_models: dict[str, Any] = field(default_factory=dict)
+    calibrators: dict[str, Any] = field(default_factory=dict)
     importances: dict[str, pd.DataFrame] = field(default_factory=dict)
 
     def auc(self, side: str | None = None, *, holdout: bool = False) -> float | None:
@@ -436,12 +437,24 @@ def register(
     return rows
 
 
-def probabilities_for(result: TrainResult, *, holdout: bool = False) -> pd.DataFrame:
-    """The walk-forward (or holdout) probabilities, ready to join onto a backtest frame."""
+def probabilities_for(
+    result: TrainResult, *, holdout: bool = False, calibrated: bool = True
+) -> pd.DataFrame:
+    """The walk-forward (or holdout) probabilities, ready to join onto a backtest frame.
+
+    Once :func:`calibrate` has run, the calibrated probability is what callers get: it is the
+    number the expected-value gate should trust. Pass ``calibrated=False`` for the raw one.
+    """
     frame = result.holdout_predictions if holdout else result.predictions
     if frame.empty:
         return frame
-    return frame[["instrument_id", "ts", "side", "probability"]]
+    column = (
+        "probability_calibrated"
+        if calibrated and "probability_calibrated" in frame
+        else "probability"
+    )
+    out = frame[["instrument_id", "ts", "side", column]].copy()
+    return out.rename(columns={column: "probability"})
 
 
 def base_rates(dataset: pd.DataFrame) -> dict[str, dict[str, float]]:
@@ -626,3 +639,156 @@ def precision_report(
             tops.append(_bucket(f"top {share:.0%}", ranked.iloc[-n:], cost_bps))
         report.tops[side] = tops
     return report
+
+
+# --- probability calibration (sprint S5i-c) ------------------------------------------------
+#
+# S5i-b showed the raw LightGBM probabilities rank well but are badly overconfident where it
+# matters: the top 1% said 57.5% and delivered 33.6%. The expected-value gate multiplies that
+# probability by the target distance, so an overconfident number makes losing trades look
+# worth taking. Isotonic regression fixes the LEVEL without touching the ORDER: it is the
+# weakest assumption that can repair calibration (monotone, non-parametric), so it cannot
+# invent an edge that the ranking does not already contain.
+#
+# It is fitted ONLY on walk-forward out-of-fold predictions — never on the holdout, and never
+# on a fold's own test rows.
+
+
+@dataclass
+class Calibrator:
+    """A monotone map from raw probability to calibrated probability, for one side."""
+
+    knots_x: np.ndarray
+    knots_y: np.ndarray
+    rows: int
+
+    def apply(self, probability: Any) -> np.ndarray:
+        values = np.asarray(probability, dtype=float)
+        if len(self.knots_x) < 2:
+            return values
+        return np.interp(values, self.knots_x, self.knots_y)
+
+
+def fit_calibrator(frame: pd.DataFrame, *, min_rows: int = 500) -> Calibrator | None:
+    """Isotonic regression of the realised outcome on the raw probability."""
+    if len(frame) < min_rows or frame["y"].nunique() < 2:
+        return None
+    from sklearn.isotonic import IsotonicRegression
+
+    model = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+    x = frame["probability"].to_numpy(dtype=float)
+    model.fit(x, frame["y"].to_numpy(dtype=float))
+    grid = np.unique(np.quantile(x, np.linspace(0, 1, 201)))
+    return Calibrator(knots_x=grid, knots_y=model.predict(grid), rows=len(frame))
+
+
+def calibration_error(frame: pd.DataFrame, column: str = "probability", buckets: int = 10) -> float:
+    """Expected calibration error: the count-weighted mean gap between what the model said and
+    what happened, over equal-count buckets. 0 is perfect; 0.09 means "off by 9 points"."""
+    if frame.empty or frame["y"].nunique() < 2:
+        return float("nan")
+    ranked = frame.sort_values(column, kind="stable")
+    edges = np.linspace(0, len(ranked), buckets + 1).astype(int)
+    total, gap = 0, 0.0
+    for i in range(buckets):
+        chunk = ranked.iloc[edges[i] : edges[i + 1]]
+        if chunk.empty:
+            continue
+        gap += len(chunk) * abs(chunk[column].mean() - chunk["y"].mean())
+        total += len(chunk)
+    return gap / total if total else float("nan")
+
+
+def calibrate(result: TrainResult, *, min_rows: int = 500) -> dict[str, Calibrator]:
+    """Fit one calibrator per side on the walk-forward predictions and add the calibrated
+    column to both the walk-forward and the holdout predictions."""
+    fitted: dict[str, Calibrator] = {}
+    if result.predictions.empty:
+        return fitted
+    for side in SIDES:
+        part = result.predictions[result.predictions["side"] == side]
+        model = fit_calibrator(part, min_rows=min_rows)
+        if model is not None:
+            fitted[side] = model
+    for frame in (result.predictions, result.holdout_predictions):
+        if frame.empty:
+            continue
+        calibrated = frame["probability"].to_numpy(dtype=float).copy()
+        for side, model in fitted.items():
+            mask = (frame["side"] == side).to_numpy()
+            if mask.any():
+                calibrated[mask] = model.apply(calibrated[mask])
+        frame["probability_raw"] = frame["probability"]
+        frame["probability_calibrated"] = calibrated
+    result.calibrators = fitted
+    return fitted
+
+
+def calibration_lines(result: TrainResult) -> list[str]:
+    """Before and after, per side, so the fix can be checked rather than assumed."""
+    out = ["probability calibration (isotonic, fitted on the walk-forward only):"]
+    for side in SIDES:
+        for period, frame in (
+            ("walk-forward", result.predictions),
+            ("holdout", result.holdout_predictions),
+        ):
+            if frame.empty or "probability_calibrated" not in frame:
+                continue
+            part = frame[frame["side"] == side]
+            if part.empty:
+                continue
+            before = calibration_error(part, "probability_raw")
+            after = calibration_error(part, "probability_calibrated")
+            top = part.nlargest(max(1, len(part) // 100), "probability_raw")
+            out.append(
+                f"  {side:<5} {period:<12} error {before:.3f} -> {after:.3f};"
+                f" top 1% said {top['probability_raw'].mean():.1%} ->"
+                f" {top['probability_calibrated'].mean():.1%}, actual {top['y'].mean():.1%}"
+            )
+    if len(out) == 1:
+        out.append("  not enough rows to calibrate")
+    return out
+
+
+# --- caching the walk-forward probabilities -------------------------------------------------
+
+
+def cache_dir(settings: Settings, universe: str, version: str, variant: str) -> Path:
+    return settings.data_dir / "predictions" / "intraday" / universe / f"{version}_{variant}"
+
+
+def save_predictions(
+    settings: Settings, result: TrainResult, *, universe: str, config: TrainConfig
+) -> list[Path]:
+    """Store the walk-forward and holdout probabilities so `precision` need not retrain.
+
+    These are model output about past days, never committed (DATA_DIR is git-ignored).
+    """
+    folder = cache_dir(settings, universe, config.label_version, config.variant)
+    folder.mkdir(parents=True, exist_ok=True)
+    written = []
+    for name, frame in (
+        ("walk_forward", result.predictions),
+        ("holdout", result.holdout_predictions),
+    ):
+        if frame.empty:
+            continue
+        path = folder / f"{name}.parquet"
+        frame.to_parquet(path, index=False, compression="zstd")
+        written.append(path)
+    (folder / "holdout_from.txt").write_text(str(result.holdout_from), encoding="utf-8")
+    return written
+
+
+def load_predictions(
+    settings: Settings, *, universe: str, version: str, variant: str, holdout: bool = False
+) -> pd.DataFrame:
+    """Read cached probabilities back; an empty frame when nothing was cached."""
+    path = cache_dir(settings, universe, version, variant) / (
+        "holdout.parquet" if holdout else "walk_forward.parquet"
+    )
+    if not path.exists():
+        return pd.DataFrame()
+    frame = pd.read_parquet(path)
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"]).dt.date
+    return frame
