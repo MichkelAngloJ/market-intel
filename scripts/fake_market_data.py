@@ -1,6 +1,7 @@
 """Seed a THROWAWAY database with synthetic market data for CI (compose-smoke): fake stocks in
 two sectors (universe nifty500), a fake Nifty 50 and India VIX, ~1100 business days of
-random-walk candles, one special session and one suspected split.
+random-walk candles, one special session and one suspected split. S4i: 1-minute bars for the
+last MINUTE_DAYS days of four stocks (universe nifty50), the fake Nifty 50 and India VIX.
 
     uv run python scripts/fake_market_data.py
 
@@ -11,18 +12,21 @@ data into a real database. It uses the app login (POSTGRES_URL). Made-up values 
 from __future__ import annotations
 
 import sys
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import numpy as np
+import pandas as pd
 
 from market_intel.config import get_settings
 from market_intel.db import postgres
+from market_intel.intraday_candles import IST, IntradayStore
 
 DAYS = 1100  # ~4.4 years: enough for walk-forward folds and a holdout (S3)
 STOCKS = [
     (f"ZZFEAT{i}", f"INE9ZZ{i:05d}0", "Fake Sector A" if i < 4 else "Fake Sector B")
     for i in range(8)
 ]
+MINUTE_DAYS, MINUTE_STOCKS = 45, 4  # S4i
 INDICES = [("NIFTY", "NSE_INDEX|Nifty 50", 20000.0), ("INDIA VIX", "NSE_INDEX|India VIX", 15.0)]
 
 
@@ -45,6 +49,37 @@ def walk(rng: np.random.Generator, n: int, start: float) -> list[tuple[float, ..
         (round(float(o), 4), round(float(h), 4), round(float(lo), 4), round(float(c), 4), int(v))
         for o, h, lo, c, v in zip(opn, high, low, close, vol, strict=True)
     ]
+
+
+def minute_bars(rng: np.random.Generator, days: list[date], start: float) -> pd.DataFrame:
+    """375 random-walk 1-minute bars per day, 09:15..15:29 IST (ts in UTC)."""
+    frames, price = [], start
+    for d in days:
+        open_utc = datetime(d.year, d.month, d.day, 9, 15, tzinfo=IST).astimezone(UTC)
+        ts = pd.date_range(open_utc, periods=375, freq="min")
+        close = price * np.exp(np.cumsum(rng.normal(0, 0.0008, 375)))
+        opn = np.concatenate([[price * np.exp(rng.normal(0, 0.003))], close[:-1]])
+        high = np.maximum(opn, close) * (1 + rng.uniform(0, 0.0008, 375))
+        low = np.minimum(opn, close) * (1 - rng.uniform(0, 0.0008, 375))
+        frames.append(
+            pd.DataFrame(
+                {
+                    "ts": ts,
+                    "open": opn,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": rng.integers(500, 5_000, 375),
+                    "oi": 0,
+                }
+            )  # fmt: skip
+        )
+        price = float(close[-1])
+    out = pd.concat(frames, ignore_index=True)
+    out[["open", "high", "low", "close"]] = out[["open", "high", "low", "close"]].round(4)
+    out["high"] = out[["open", "high", "close"]].max(axis=1)
+    out["low"] = out[["open", "low", "close"]].min(axis=1)
+    return out
 
 
 def main() -> int:
@@ -111,7 +146,22 @@ def main() -> int:
                 " VALUES (%s, %s, 'suspected_split_bonus', 0.5)",
                 (ids["ZZFEAT2"], days[300]),
             )
-    print(f"fake market data: {len(STOCKS)} stocks, {len(INDICES)} indices, {len(rows)} candles")
+            # S4i: 1-minute bars (upserted like the real loader) and the nifty50 universe
+            store, minute_rows = IntradayStore(conn), 0
+            recent = days[-MINUTE_DAYS:]
+            for symbol, _, _ in STOCKS[:MINUTE_STOCKS]:
+                conn.execute(
+                    "INSERT INTO universe_members (universe, instrument_id, as_of)"
+                    " VALUES ('nifty50', %s, %s)",
+                    (ids[symbol], days[-1]),
+                )
+                minute_rows += store.upsert(ids[symbol], minute_bars(rng, recent, 100.0))
+            for _, key, start in INDICES:
+                minute_rows += store.upsert(ids[key], minute_bars(rng, recent, start))
+    print(
+        f"fake market data: {len(STOCKS)} stocks, {len(INDICES)} indices, {len(rows)} candles,"
+        f" {minute_rows} 1-minute bars"
+    )
     return 0
 
 

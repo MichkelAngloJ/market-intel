@@ -17,6 +17,8 @@ on:
       - "src/market_intel/source_health.py"
       - "src/market_intel/rate_limit.py"
       - "src/market_intel/candles.py"
+      - "src/market_intel/intraday_candles.py"
+      - "src/market_intel/intraday.py"
       - "src/market_intel/upstox.py"
       - "src/market_intel/features.py"
       - "src/market_intel/feature_spec.py"
@@ -50,6 +52,8 @@ on:
       - "src/market_intel/source_health.py"
       - "src/market_intel/rate_limit.py"
       - "src/market_intel/candles.py"
+      - "src/market_intel/intraday_candles.py"
+      - "src/market_intel/intraday.py"
       - "src/market_intel/upstox.py"
       - "src/market_intel/features.py"
       - "src/market_intel/feature_spec.py"
@@ -180,6 +184,16 @@ jobs:
           uv run python -m market_intel.features build
           uv run python -m market_intel.features labels
           uv run python -m market_intel.features check-leakage --sample 40
+
+      # S4i: intraday features v1, triple-barrier labels and the intraday leakage test on the
+      # SYNTHETIC 1-minute bars from the same script (never Upstox). A leak fails the job.
+      - name: Intraday features, labels and leakage test on fake data
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          uv run python -m market_intel.intraday features build
+          uv run python -m market_intel.intraday labels build
+          uv run python -m market_intel.intraday check-leakage --sample 40
 
       # S3: walk-forward training, baselines after costs, SHAP, MLflow and the registry on the
       # same synthetic data (both fake sectors are small, so only the pooled model trains).
