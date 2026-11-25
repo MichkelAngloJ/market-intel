@@ -85,6 +85,7 @@ class FoldScore:
     auc: float | None
     base_rate: float
     mean_probability: float
+    constant: bool = False  # the fit could not split and predicts one value for every row
 
 
 @dataclass
@@ -111,6 +112,12 @@ class TrainResult:
             f" {self.config.variant}): {len(self.folds)} monthly folds,"
             f" holdout from {self.holdout_from}"
         ]
+        constant = sum(1 for f in self.folds if f.constant)
+        if constant:
+            out.append(
+                f"  WARNING: {constant} of {len(self.folds)} folds predicted a single value"
+                " (too few training rows to split); treat their AUC as meaningless"
+            )
         for side in SIDES:
             wf, ho = self.auc(side), self.auc(side, holdout=True)
             rows = int((self.predictions["side"] == side).sum()) if len(self.predictions) else 0
@@ -248,6 +255,15 @@ def run_training(
             progress(f"{side} {test_month:%Y-%m} (train {len(train):,})")
             model = fit(train)
             probability = model.predict_proba(test[list(TRAINING_FEATURES)])[:, 1]
+            constant = bool(np.ptp(probability) < 1e-9)
+            if constant:
+                log.warning(
+                    "intraday_fold_constant",
+                    month=str(test_month),
+                    side=side,
+                    train_rows=len(train),
+                    hint="too few training rows for min_child_samples to allow a split",
+                )
             scored = test[["instrument_id", "trade_date", "ts", "minute", "side", "y"]].copy()
             scored["probability"] = probability
             predictions.append(scored)
@@ -260,6 +276,7 @@ def run_training(
                     auc=_auc(test["y"].to_numpy(), probability),
                     base_rate=float(test["y"].mean()),
                     mean_probability=float(probability.mean()),
+                    constant=constant,
                 )
             )
     result.predictions = (
