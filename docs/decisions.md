@@ -359,3 +359,18 @@
 - Decision: Rule strategies (opening-range breakout, VWAP trend and reversion, gap, volume burst, relative strength, mood and no-trade filters) are baselines for a LightGBM meta-model on triple-barrier labels (fixed v1 and volatility-scaled v2), evaluated with a monthly walk-forward and a 3-month holdout in an event-driven backtest after current intraday costs. Signals are trade plans sized from the owner's capital (1% risk per trade, 2% daily loss limit, max 5 trades by default); trades happen only when the expected value after costs is positive. A replay command demonstrates a past day.
 - Concern (planner): Most intraday strategies lose after costs; "no trading" is a valid outcome. No live orders.
 - Reason (owner): Intraday is priority 1.
+
+## 2026-11-25 - Intraday longer hold, confidence calibration and percentage reporting
+- Decision: Add longer-hold intraday labels (v3: ATR-scaled barriers with 30- and 60-bar limits
+  and a hold-to-close variant; v1 and v2 kept as baselines), a confidence-calibration/precision
+  report (probability deciles and the top 10/5/1% most-confident signals with their realised win
+  rate and net profit after costs, per side; the holdout marked "one trade, not evidence"), and
+  plain-percentage reporting that ranks every strategy and the model against "no trading" (0%)
+  and shows, in the replay, the day's charges and gross move as percentages. No new instruments,
+  no new data, no live orders, nothing promoted.
+- Concern (planner): Nifty 50 large caps rarely move enough intraday to beat the ~0.1%
+  round-trip charge, so a longer hold may still lose, and the calibration test may confirm the
+  strongest "yes" are not profitable. These are measurement tools to be reused on a wider, more
+  volatile universe (the next task). No live orders.
+- Reason (owner): Test whether holding longer helps and whether a few very-confident signals are
+  strong, and show "trade vs no-trade" as clear percentages.

@@ -507,10 +507,26 @@ How it works: [architecture](architecture.md#intraday-strategies-backtest-and-si
 | Train the meta-model (walk-forward, then the holdout once) | `uv run python -m market_intel.intraday train --capital 100000` |
 | The backtests stored so far | `uv run python -m market_intel.intraday report` |
 | Replay one past day, trade by trade | `uv run python -m market_intel.intraday replay --date YYYY-MM-DD --capital 100000` |
+| Longer-hold labels (30 / 60 bars, hold to close) | `uv run python -m market_intel.intraday labels build --version v3` |
+| The leakage test on the longer-hold labels | `uv run python -m market_intel.intraday check-leakage --labels v3 --sample 500` |
+| Is the model's confidence meaningful, and do the strongest signals pay? | `uv run python -m market_intel.intraday precision --capital 100000` |
 
 **Order:** candles, `features build`, `labels build`, `labels build --version v2`, then
 `backtest` and `train`. `replay` needs the features and labels of the day; with no `--date` it
 takes the last built day.
+
+**Reading the report.** `report` ranks every run worst-first in plain percentages, with
+a "vs none" column: the gap to doing nothing, which returns 0%. A negative number is
+money that no trading would have kept. The replay prints the day's charges and the gross
+price move as percentages too, so "the fee was bigger than the move" is visible without
+arithmetic.
+
+**Reading `precision`.** The calibration table shows what the model said against what
+happened: if decile 10 says 43% and delivers 34%, the model ranks correctly but its
+numbers are overconfident, and the expected-value gate will trust them too much. The
+top 10/5/1% rows answer the only question that matters for a "few strong signals"
+strategy: whether the most confident trades are net positive after the round trip. They
+are not, on this data. It retrains the walk-forward, so it takes about twenty minutes.
 
 **Reading the backtest.** The table ranks every rule strategy and the model against
 `no_trading`, after all charges and the assumed slippage. Under it is a grid showing the best

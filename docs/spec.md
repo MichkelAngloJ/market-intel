@@ -161,6 +161,11 @@ Decision 2026-11-22:
   expected gain after costs is positive.
 - Fixed risk per trade, a daily loss limit and a maximum number of trades.
 - 15 minutes is the main horizon; 5 minutes is an experiment.
+- Measured result (S5i and S5i-b, 2022-2026 Nifty 50 minute data): no rule strategy and no
+  meta-model beats "no trading" after costs, at any slippage down to zero, at any hold
+  from 5 bars to the session close, and in no confidence band including the model's most
+  confident 1%. Intraday on large-cap cash equity is not viable at these charges; the
+  tools built for it are reusable on a wider, more volatile universe.
 - Strategies, backtest and sizing (S5i, decision 2026-11-25): eight rule strategies are the
   baselines for a LightGBM meta-model on the triple-barrier labels (fixed v1 and
   volatility-scaled v2), judged by a monthly walk-forward and a holdout scored once, in an

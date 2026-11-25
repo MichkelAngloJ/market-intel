@@ -1003,6 +1003,46 @@ capital and slippage, and the result after every charge) and `backtest_trades` e
 trade, so a result can be checked trade by trade (migration 0010). Nothing in these tables is
 a real order: the project never places any.
 
+**Labels v3 — the longer hold** (S5i-b). v2's limits (5, 10, 15 bars) left the question open:
+would the same barriers pay if a trade were simply given more time? v3 answers it with the same
+ATR-scaled barriers and much longer limits — 30 bars, 60 bars, and `cl`, which holds to the
+15:20 close. The answer on 2022-2026 Nifty 50 data is **no, and for an instructive reason**:
+with an ATR-scaled barrier one side is almost always hit inside half an hour, so the time-limit
+outcome falls to about 0% and the 30-bar, 60-bar and hold-to-close results are nearly
+identical. The hit rate rises a few points (27.4% to 31.3% for longs at k=1.5) but the average
+gross return does not move (-0.0037% to -0.0038%): the extra wins are paid for by the former
+time-limit exits turning into stops. Variant names are stable because they are Parquet columns
+and are stored in `backtest_runs`, so `cl` rather than a bar count.
+
+One subtlety the leakage test had to learn: a hold-to-close variant has **no bars after its
+exit**, so the "no label changes when bars after the exit change" check is vacuous for it and a
+leaky ATR slipped through. The ATR invariant (no later bar may move the ATR at t) is therefore
+checked separately, against any bar after t, on every grid.
+
+**Confidence calibration and precision** (`intraday precision`). AUC says whether a model ranks
+well; it does not say whether the number it prints means anything, nor whether the signals it is
+most sure about actually pay. The command trains the walk-forward and then reports, per side:
+
+- a **calibration table** — probability deciles against the rate at which the target really came
+  first, so over- and under-confidence are visible;
+- the **top 10% / 5% / 1% most confident signals**, with their count, the realised win rate
+  *measured in money* and the **mean net result per trade after the full round-trip cost**.
+
+The holdout gets the same treatment, labelled "scored once", with a warning printed when it
+holds too few rows to mean anything. Nothing is stored: this describes a training run, not a
+decision. On the real data the ranking works (the actual target rate rises monotonically across
+deciles) but is worth about 1.2 bps a trade against an 18.26 bps round trip, and the model is
+badly overconfident exactly where it matters: at the top 1% it says 57.5% and delivers 33.6%.
+Every confidence band loses money after costs, so "a few strong yes" does not exist on this
+data.
+
+**Reporting in plain percentages.** `report` ranks every run worst-first with a "vs none"
+column, the gap to doing nothing, which returns exactly 0% and risks nothing; the per-trade edge
+in basis points stays for detail. `replay` prints the day's traded value, the gross price move
+the trades captured, the charges as a share of both capital and traded value, and the net result
+in rupees and percent — and says so outright when the charges exceeded the whole move. The point
+is that "the fee is bigger than the move" should be readable without arithmetic.
+
 ## Models, evaluation, costs and the registry
 
 Sprint task S3 (decisions 2026-11-24). Command: `market_intel.models` (`train`, `report`, `ui`);

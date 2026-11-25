@@ -16,7 +16,11 @@ Phase 3 measures the contributions per sector and stock with SHAP instead of ass
 
 Costs are a factor of their own intraday: an intraday round trip costs about 0.13% of the
 position in charges alone (S5i), so a signal has to be worth more than that before it is
-worth acting on at all.
+worth acting on at all. Measured on 2022-2026 Nifty 50 minute data (S5i-b), the gross
+edge of every rule and of the meta-model is under 1 basis point a trade, against a round
+trip of about 18 basis points at Rs 100,000 of notional with 5 bps of slippage a side:
+the fee is roughly twenty times the signal. Holding longer does not help, because an
+ATR-scaled barrier is almost always hit within half an hour.
 
 ## Factors
 
