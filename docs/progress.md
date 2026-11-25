@@ -20,10 +20,10 @@ Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S5i (intraday strategies, ML meta-model, backtest after costs, capital sizing, replay
-  demo) done, awaiting planner review. Next: S6 (mutual funds: AMFI NAV, ranking, "how sure"
-  history stats, split calculator with minimums, keep/exit flags). 0.11 (remove the
-  testing-laptop dependency) stays planned for not before 2026-12-03.
+- Now: S5i-b (longer intraday hold, confidence calibration, plain-percentage reporting) in
+  progress. Next: a wider, more volatile universe (a separate task), then S6 (mutual funds:
+  AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
+  flags). 0.11 (remove the testing-laptop dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
   News RSS for the watchlist, polite rate); 1.3 Upstox login and token; 1.4 daily candles
@@ -48,6 +48,12 @@ Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- S5i review (planner, 2026-11-25): passed. Verified: CI and compose-smoke green at the tip;
+  migration 0010 present; decisions appended; no data, model or log files tracked. The removed
+  test in tests/test_intraday_candles.py (the old per-writer replace retry) was superseded by
+  the shared `file_lock.safe_replace` and tests/test_safe_replace.py: an authorised refactor,
+  not test-weakening. Finding to act on: nothing beat `no_trading`; the rules lose even at zero
+  slippage, and the model loses less only because its EV gate trades about 4x less often.
 - S4i review (planner, 2026-11-25): passed. Answers: (1) a price event on the decision day
   is not a feature: accepted; (2) the v1 barriers are too wide (~70% time-outs): S5i tests
   volatility-scaled barriers and shorter limits, and keeps v1 as a baseline; (3) NULL sector
@@ -176,7 +182,8 @@ Last updated: 2026-11-25, HEAD ad735f5. Updated at the end of every task (see
 | S2 | done 2026-11-24 (HEAD e91fb33) | passed (planner, 2026-11-24) | Timing convention; features v1 (32, news not for training) and separate forward labels (21/63/126 days, exclusion reasons) with migration 0007; leakage test (truncation, late news, label names, shifted data) in CI and on real data; special sessions out of the gap and label calendar; BHARATBOND out of indices; yfinance curl-cffi off |
 | S3 | done 2026-11-25 (HEAD c472d0a) | passed as engineering (planner, 2026-11-25) | Baselines + per-sector LightGBM (pooled fallback), walk-forward after costs, SHAP, MLflow, model registry (migration 0008); the models do NOT beat the baselines |
 | S4i | done 2026-11-25 (HEAD 55bedc8) | passed (planner, 2026-11-25) | 1-minute candles for the nifty50 universe, the Nifty 50, India VIX and 12 sector indices from 2022 (resumable, one month per request, thin days); the intraday timing convention; features v1 (41) and long/short triple-barrier labels as monthly Parquet with build records (migration 0009); the intraday leakage test (5 checks, 4 leaky fakes) in CI and on real data |
-| S5i | done 2026-11-25 (HEAD ad735f5) | awaiting planner review | Labels v2 (ATR-scaled barriers, 3x3 grid) with its own leakage check; 8 rule strategies with mood and no-trade filters; intraday charges (official rates) and the shared capital-sizing component; event-driven backtest after costs with migration 0010 (backtest_runs, backtest_trades, model kind 'intraday'); LightGBM meta-model per side (monthly walk-forward, holdout scored once); backtest / train / report / replay commands. NOTHING beats `no_trading` |
+| S5i | done 2026-11-25 (HEAD ad735f5) | passed (planner, 2026-11-25) | Labels v2 (ATR-scaled barriers, 3x3 grid) with its own leakage check; 8 rule strategies with mood and no-trade filters; intraday charges (official rates) and the shared capital-sizing component; event-driven backtest after costs with migration 0010 (backtest_runs, backtest_trades, model kind 'intraday'); LightGBM meta-model per side (monthly walk-forward, holdout scored once); backtest / train / report / replay commands. NOTHING beats `no_trading` |
+| S5i-b | in progress | - | Longer intraday hold (labels v3), confidence calibration and precision, plain-percentage reporting |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
