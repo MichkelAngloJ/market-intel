@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from market_intel import intraday as it
+from market_intel.config import ConfigError
 
 
 @pytest.fixture(scope="module")
@@ -386,3 +387,54 @@ def test_the_v2_check_catches_an_atr_that_peeks_ahead(inp):
     samples = it.pick_samples(inp, 6)
     assert it.check_labels_volatility(inp, samples, labels=leaky_atr)
     assert not it.check_labels_volatility(inp, samples)
+
+
+# --- labels v3: the longer hold (S5i-b) ----------------------------------------------------
+
+
+def test_the_v3_grid_holds_for_thirty_sixty_bars_or_to_the_close():
+    assert [v.name for v in it.VARIANTS_V3] == [
+        "k10_b30", "k10_b60", "k10_bcl", "k15_b30", "k15_b60", "k15_bcl",
+        "k20_b30", "k20_b60", "k20_bcl",
+    ]  # fmt: skip
+    assert it.variants_for("v3") == it.VARIANTS_V3
+    assert it.variants_for("v2") == it.VARIANTS
+
+
+def test_the_v2_variant_names_never_change():
+    """They are Parquet column names and are stored in backtest_runs."""
+    assert [v.name for v in it.VARIANTS] == [
+        "k10_b05", "k10_b10", "k10_b15", "k15_b05", "k15_b10", "k15_b15",
+        "k20_b05", "k20_b10", "k20_b15",
+    ]  # fmt: skip
+
+
+def test_hold_to_close_is_named_cl_and_reaches_the_1520_bar():
+    assert it.Variant(1.0, it.HOLD_TO_CLOSE).name == "k10_bcl"
+    assert it.Variant(1.0, 10_000).name == "k10_bcl"  # anything that long is the same thing
+    inputs = flat_inputs(wiggle=0.1)
+    frame = it.build_labels_volatility(inputs, 1, [it.Variant(2.0, it.HOLD_TO_CLOSE)])
+    row = frame[(frame["trade_date"] == DAY) & (frame["minute"] == 345)].iloc[0]
+    assert row["bars_held_k20_bcl"] == 20  # 15:01 .. 15:20
+
+
+def test_an_unknown_version_has_no_grid():
+    with pytest.raises(ConfigError, match="no barrier grid"):
+        it.variants_for("v9")
+
+
+def test_a_longer_limit_times_out_less_often(inp):
+    short = it.build_labels_volatility(inp, 1, [it.Variant(2.0, 5)])
+    long = it.build_labels_volatility(inp, 1, [it.Variant(2.0, 60)])
+    short_ok = short[short["excluded_reason"].isna()]
+    long_ok = long[long["excluded_reason"].isna()]
+    assert (long_ok["outcome_k20_b60"] == 0).mean() < (short_ok["outcome_k20_b05"] == 0).mean()
+
+
+def test_the_v3_labels_pass_the_leakage_test(inp):
+    samples = it.pick_samples(inp, 6)
+    report = it.run_leakage_checks(inp, samples, label_version="v3")
+    assert report.passed, report.lines()
+    assert "d2) v3 labels" in "\n".join(report.lines())
+    # and the leaky ATR fake is still caught on the v3 grid
+    assert it.check_labels_volatility(inp, samples, labels=leaky_atr, variants=it.VARIANTS_V3)

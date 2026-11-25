@@ -44,7 +44,7 @@ def dataset(days: int = 260, seed: int = 7) -> pd.DataFrame:
                         "entry_price": 100.0,
                         "atr": 1.0,
                         "outcome": 1 if edge + rng.normal(0, 0.5) > 0.5 else -1,
-                        "gross_return": 0.01,
+                        "gross_return": 0.0,  # set from the outcome below (2:1 payoff)
                         "bars_held": 5,
                         "y": 0,
                         **{f: float(rng.normal()) for f in FEATURES_V1},
@@ -53,6 +53,7 @@ def dataset(days: int = 260, seed: int = 7) -> pd.DataFrame:
                 )
                 rows[-1]["ret_5m"] = edge  # the feature the outcome follows
                 rows[-1]["y"] = 1 if rows[-1]["outcome"] == 1 else 0
+                rows[-1]["gross_return"] = 0.01 if rows[-1]["outcome"] == 1 else -0.005
     return pd.DataFrame(rows)
 
 
@@ -239,3 +240,79 @@ def test_a_model_card_states_the_status_and_the_warning(trained):
 def test_an_empty_dataset_is_refused():
     with pytest.raises(ValueError, match="empty"):
         M.run_training(pd.DataFrame({"trade_date": []}))
+
+
+# --- confidence calibration and precision (S5i-b) -------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def precision(trained):
+    data = dataset(days=260)
+    return M.precision_report(data, M.probabilities_for(trained), capital=100_000, slippage_bps=5.0)
+
+
+def test_the_calibration_table_has_one_row_per_decile(precision):
+    for side in M.SIDES:
+        buckets = precision.calibration[side]
+        assert len(buckets) == M.DECILES
+        assert [b.label for b in buckets][:2] == ["decile 1", "decile 2"]
+        counts = {b.trades for b in buckets}
+        assert max(counts) - min(counts) <= 1  # equal-count buckets
+
+
+def test_confidence_rises_with_the_decile_and_tracks_the_real_rate(precision):
+    buckets = precision.calibration["long"]
+    said = [b.mean_probability for b in buckets]
+    assert said == sorted(said)  # deciles are ordered by probability
+    # the planted signal is learnable, so the top decile really does hit the target more often
+    assert buckets[-1].target_rate > buckets[0].target_rate + 0.3
+    # and the model is roughly calibrated: what it said is close to what happened
+    for b in buckets:
+        assert abs(b.mean_probability - b.target_rate) < 0.15
+
+
+def test_the_top_bands_are_the_most_confident_signals(precision):
+    tops = precision.tops["long"]
+    assert [b.label for b in tops] == ["top 10%", "top 5%", "top 1%"]
+    assert tops[0].trades > tops[1].trades > tops[2].trades
+    assert tops[2].mean_probability >= tops[0].mean_probability  # top 1% is the most confident
+
+
+def test_the_net_result_per_trade_is_after_the_full_round_trip_cost(precision):
+    from market_intel.costs import DEFAULT_INTRADAY_COSTS
+
+    expected = DEFAULT_INTRADAY_COSTS.breakeven_fraction(100_000, 5.0) * 10_000
+    assert precision.cost_bps == pytest.approx(expected)
+    for b in precision.calibration["long"]:
+        assert b.mean_net_bps == pytest.approx(b.mean_gross_bps - precision.cost_bps)
+
+
+def test_a_losing_band_is_called_out_and_a_winning_one_too(precision):
+    text = "\n".join(precision.lines())
+    assert "round trip costs" in text and "bps" in text
+    assert ("net positive at top" in text) or ("every confidence band loses money" in text)
+
+
+def test_the_holdout_can_carry_a_not_evidence_warning():
+    frame = pd.DataFrame(
+        {
+            "instrument_id": [1],
+            "ts": [datetime(2024, 3, 5, 4, 0, tzinfo=UTC)],
+            "side": ["long"],
+            "probability": [0.9],
+            "outcome": [1],
+            "gross_return": [0.01],
+            "trade_date": [date(2024, 3, 5)],
+        }
+    )
+    report = M.precision_report(
+        frame, frame, capital=100_000, period="holdout", warning="only 1 scored row"
+    )  # the same frame on both sides: a stale probability column must not break the merge
+    assert "only 1 scored row" in "\n".join(report.lines())
+    assert report.tops["long"][0].trades == 1
+
+
+def test_an_empty_prediction_set_gives_an_empty_report():
+    report = M.precision_report(pd.DataFrame(), pd.DataFrame(), capital=100_000)
+    assert report.calibration == {} and report.tops == {}
+    assert "calibration" in report.lines()[0]

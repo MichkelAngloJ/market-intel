@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 
 from market_intel.config import Settings
-from market_intel.intraday import FEATURES_V1
+from market_intel.intraday import ATR_LABEL_VERSIONS, FEATURES_V1
 from market_intel.intraday_strategies import STRATEGIES
 from market_intel.logging_setup import get_logger
 
@@ -151,7 +151,7 @@ def _auc(y: np.ndarray, p: np.ndarray) -> float | None:
 
 
 def label_columns(config: TrainConfig) -> tuple[str, str, str]:
-    if config.label_version == "v2":
+    if config.label_version in ATR_LABEL_VERSIONS:
         return (
             f"outcome_{config.variant}",
             f"gross_return_{config.variant}",
@@ -174,7 +174,7 @@ def build_dataset(
         base[f"signal_{name}"] = signals[name].to_numpy()
     keep = ["instrument_id", "ts", "side", "entry_price", "excluded_reason",
             outcome_col, return_col, bars_col]  # fmt: skip
-    if config.label_version == "v2":
+    if config.label_version in ATR_LABEL_VERSIONS:
         keep.append("atr")
     merged = base.merge(labels[keep], on=["instrument_id", "ts"], how="inner")
     merged = merged[merged["excluded_reason"].isna()].drop(columns=["excluded_reason"])
@@ -470,3 +470,159 @@ def annualise(total_return_pct: float, days: int) -> float:
     if growth <= 0:
         return -100.0
     return 100 * (math.pow(growth, 252 / days) - 1)
+
+
+# --- confidence calibration and precision (sprint S5i-b) ----------------------------------
+#
+# Two questions the AUC does not answer:
+#
+# (a) when the model says 70%, does the target really come first about 70% of the time?
+#     (calibration — a model can rank well and still be badly calibrated);
+# (b) are the MOST confident "yes" signals actually profitable after costs? A model with no
+#     usable edge on average can still be right about its strongest few, and that is exactly
+#     the case worth knowing about before dismissing it.
+#
+# Everything here is printed, never stored: it describes a training run, not a decision.
+
+DECILES = 10
+TOP_SHARES = (0.10, 0.05, 0.01)
+
+
+@dataclass
+class Bucket:
+    """One row of a calibration or precision table."""
+
+    label: str
+    trades: int
+    mean_probability: float
+    target_rate: float  # how often the target really came first
+    win_rate: float  # how often the trade made money AFTER costs
+    mean_net_bps: float  # average net result per trade, in bps of the position
+    mean_gross_bps: float
+
+    def line(self) -> str:
+        return (
+            f"  {self.label:<12} {self.trades:>8,} {self.mean_probability:>9.1%}"
+            f" {self.target_rate:>10.1%} {self.win_rate:>9.1%}"
+            f" {self.mean_gross_bps:>+11.2f} {self.mean_net_bps:>+9.2f}"
+        )
+
+
+BUCKET_HEADER = (
+    f"  {'bucket':<12} {'trades':>8} {'said':>9} {'actual':>10} {'won Rs':>9}"
+    f" {'gross bps':>11} {'net bps':>9}"
+)
+
+
+def _bucket(label: str, part: pd.DataFrame, cost_bps: float) -> Bucket:
+    gross_bps = part["gross_return"].astype(float) * 10_000
+    net_bps = gross_bps - cost_bps
+    return Bucket(
+        label=label,
+        trades=len(part),
+        mean_probability=float(part["probability"].mean()),
+        target_rate=float((part["outcome"] == 1).mean()),
+        win_rate=float((net_bps > 0).mean()),
+        mean_net_bps=float(net_bps.mean()),
+        mean_gross_bps=float(gross_bps.mean()),
+    )
+
+
+@dataclass
+class PrecisionReport:
+    """Calibration and top-confidence precision, per side."""
+
+    cost_bps: float
+    capital: float
+    slippage_bps: float
+    period: str = "walk_forward"
+    calibration: dict[str, list[Bucket]] = field(default_factory=dict)
+    tops: dict[str, list[Bucket]] = field(default_factory=dict)
+    warning: str = ""
+
+    def lines(self) -> list[str]:
+        out = [
+            f"confidence calibration and precision ({self.period}):"
+            f" capital Rs {self.capital:,.0f}, slippage {self.slippage_bps:g} bps a side,"
+            f" so a round trip costs {self.cost_bps:.2f} bps"
+        ]
+        if self.warning:
+            out.append(f"  {self.warning}")
+        for side in SIDES:
+            buckets = self.calibration.get(side)
+            if not buckets:
+                continue
+            out += ["", f"{side}: does the probability mean anything?", BUCKET_HEADER]
+            out += [b.line() for b in buckets]
+            tops = self.tops.get(side) or []
+            if tops:
+                out += [f"{side}: the most confident signals", BUCKET_HEADER]
+                out += [b.line() for b in tops]
+                best = max(tops, key=lambda b: b.mean_net_bps)
+                verdict = (
+                    f"net positive at {best.label} ({best.mean_net_bps:+.2f} bps a trade)"
+                    if best.mean_net_bps > 0
+                    else "every confidence band loses money after costs"
+                )
+                out.append(f"  -> {side}: {verdict}")
+        return out
+
+
+def precision_report(
+    dataset: pd.DataFrame,
+    predictions: pd.DataFrame,
+    *,
+    capital: float,
+    costs: Any = None,
+    slippage_bps: float = 5.0,
+    period: str = "walk_forward",
+    deciles: int = DECILES,
+    shares: Sequence[float] = TOP_SHARES,
+    warning: str = "",
+) -> PrecisionReport:
+    """Calibration deciles and the top ``shares`` most-confident signals, per side.
+
+    The net result per trade is the realised gross return minus the full round-trip cost at
+    ``capital`` of notional (the backtest's exposure cap), so it is comparable with the
+    backtest's ``edge bps`` and independent of position size.
+    """
+    from market_intel.costs import DEFAULT_INTRADAY_COSTS
+
+    costs = costs or DEFAULT_INTRADAY_COSTS
+    cost_bps = costs.breakeven_fraction(capital, slippage_bps) * 10_000
+    report = PrecisionReport(
+        cost_bps=cost_bps,
+        capital=capital,
+        slippage_bps=slippage_bps,
+        period=period,
+        warning=warning,
+    )
+    if predictions.empty or dataset.empty:
+        return report
+    # the probability comes from the predictions; drop any stale copy so the merge cannot
+    # produce probability_x / probability_y
+    base = dataset.drop(columns=["probability"], errors="ignore")
+    joined = base.merge(
+        predictions[["instrument_id", "ts", "side", "probability"]],
+        on=["instrument_id", "ts", "side"],
+        how="inner",
+    )
+    for side in SIDES:
+        part = joined[joined["side"] == side]
+        if part.empty:
+            continue
+        ranked = part.sort_values("probability", kind="stable")
+        groups: list[Bucket] = []
+        # equal-count deciles by probability, lowest first
+        edges = np.linspace(0, len(ranked), deciles + 1).astype(int)
+        for i in range(deciles):
+            chunk = ranked.iloc[edges[i] : edges[i + 1]]
+            if not chunk.empty:
+                groups.append(_bucket(f"decile {i + 1}", chunk, cost_bps))
+        report.calibration[side] = groups
+        tops: list[Bucket] = []
+        for share in shares:
+            n = max(1, int(round(len(ranked) * share)))
+            tops.append(_bucket(f"top {share:.0%}", ranked.iloc[-n:], cost_bps))
+        report.tops[side] = tops
+    return report

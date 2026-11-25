@@ -38,7 +38,6 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from market_intel import intraday_backtest
 from market_intel.config import ConfigError, Settings, get_settings
 from market_intel.db import postgres
 from market_intel.ingestion import ingestion_run
@@ -47,7 +46,10 @@ from market_intel.logging_setup import bound_context, configure_logging, get_log
 COMPONENT = "intraday"
 DEFAULT_CAPITAL = 100_000.0
 VERSION = "v1"
-LABEL_VERSIONS = ("v1", "v2")  # v2 = volatility-scaled barriers (S5i)
+# v1 = fixed percentage barriers (S4i); v2 = ATR-scaled with short limits (S5i);
+# v3 = the same ATR barriers held far longer, up to the session close (S5i-b)
+LABEL_VERSIONS = ("v1", "v2", "v3")
+ATR_LABEL_VERSIONS = ("v2", "v3")  # the versions whose barriers scale with the ATR
 IST = ZoneInfo("Asia/Kolkata")
 OPEN_IST = time(9, 15)
 SESSION_BARS = 375  # 09:15 .. 15:29
@@ -122,9 +124,11 @@ GROUPS: dict[str, tuple[str, ...]] = {
     ),
 }
 LABEL_COLUMNS = ("side", "outcome", "gross_return", "bars_held", "entry_price", "excluded_reason")
-ATR_BARS = 15  # the ATR window for v2 barriers, in one-minute bars
+ATR_BARS = 15  # the ATR window for the scaled barriers, in one-minute bars
 K_GRID = (1.0, 1.5, 2.0)  # target = k x ATR, stop = k/2 x ATR
-BARS_GRID = (5, 10, 15)  # time limits in bars
+BARS_GRID = (5, 10, 15)  # v2 time limits, in bars
+HOLD_TO_CLOSE = EXIT_MINUTE  # a limit this long always ends at the 15:20 bar
+BARS_GRID_V3 = (30, 60, HOLD_TO_CLOSE)  # v3: half an hour, an hour, or all day
 FORBIDDEN_WORDS = ("outcome", "gross_return", "label", "future", "target", "barrier")
 
 log = get_logger("market_intel.intraday")
@@ -461,11 +465,27 @@ class Variant:
 
     @property
     def name(self) -> str:
-        return f"k{round(self.k * 10):02d}_b{self.max_bars:02d}"
+        """A stable column name; ``cl`` means "hold to the 15:20 close". The v2 names
+        (k10_b05 and friends) must never change: they are Parquet column names and are
+        stored in backtest_runs."""
+        bars = "cl" if self.max_bars >= HOLD_TO_CLOSE else f"{self.max_bars:02d}"
+        return f"k{round(self.k * 10):02d}_b{bars}"
 
 
 VARIANTS: tuple[Variant, ...] = tuple(Variant(k, bars) for k in K_GRID for bars in BARS_GRID)
-VARIANT_BY_NAME = {v.name: v for v in VARIANTS}
+VARIANTS_V3: tuple[Variant, ...] = tuple(Variant(k, b) for k in K_GRID for b in BARS_GRID_V3)
+VARIANTS_BY_VERSION: dict[str, tuple[Variant, ...]] = {"v2": VARIANTS, "v3": VARIANTS_V3}
+VARIANT_BY_NAME = {v.name: v for v in (*VARIANTS, *VARIANTS_V3)}
+
+
+def variants_for(version: str) -> tuple[Variant, ...]:
+    """The barrier grid a label version is built with."""
+    try:
+        return VARIANTS_BY_VERSION[version]
+    except KeyError:
+        raise ConfigError(
+            f"{version!r} has no barrier grid; the ATR versions are {', '.join(ATR_LABEL_VERSIONS)}"
+        ) from None
 
 
 def variant_columns(variants: Sequence[Variant] = VARIANTS) -> list[str]:
@@ -762,6 +782,21 @@ def check_labels_volatility(
         first = base.iloc[0]
         if later.empty or not np.isclose(float(first["entry_price"]), float(later["open"].iloc[0])):
             failures.append(f"instrument {inst} at {t}: entry is not the next bar's open")
+        # the ATR is a look-back window, so NO later bar may move it. This is checked on its
+        # own, because a hold-to-close variant has no bars after its exit at all and the
+        # label-stability check below would then be vacuous.
+        after_t = bars.index > t
+        if after_t.any():
+            shaken = bars.copy()
+            shaken.loc[after_t, ["open", "high", "low", "close"]] *= 1.5
+            moved = labels(
+                replace(inputs, bars={**inputs.bars, inst: shaken}), inst, variants, only=[t]
+            )
+            if moved.empty:
+                failures.append(f"instrument {inst} at {t}: the label disappeared")
+                continue
+            if not np.isclose(float(first["atr"]), float(moved.iloc[0]["atr"]), rtol=1e-9):
+                failures.append(f"instrument {inst} at {t}: the ATR moved with later bars")
         # everything from the exit bar onwards may be rewritten freely
         local = bars.index.tz_convert(IST)
         minute = int(local[bars.index.get_loc(t)].hour * 60 + local[bars.index.get_loc(t)].minute)
@@ -769,7 +804,7 @@ def check_labels_volatility(
         cut = min(minute + longest, EXIT_MINUTE)
         beyond = bars.index > t + pd.Timedelta(minutes=cut - minute)
         if not beyond.any():
-            continue
+            continue  # a hold-to-close variant: the exit IS the session close
         shaken = bars.copy()
         shaken.loc[beyond, ["open", "high", "low", "close"]] *= 1.5
         moved = labels(
@@ -779,8 +814,6 @@ def check_labels_volatility(
             failures.append(f"instrument {inst} at {t}: the label disappeared")
             continue
         after = moved.iloc[0]
-        if not np.isclose(float(first["atr"]), float(after["atr"]), rtol=1e-9):
-            failures.append(f"instrument {inst} at {t}: the ATR moved with later bars")
         for v in variants:
             a, b = first[f"outcome_{v.name}"], after[f"outcome_{v.name}"]
             if a != b:
@@ -805,6 +838,7 @@ def run_leakage_checks(
     build: FeatureFn = build_minute_features,
     labels: LabelFn = build_labels,
     barriers: Barriers = DEFAULT_BARRIERS,
+    label_version: str = "v2",
 ) -> LeakageReport:
     insts = sorted({i for i, _ in samples})
     return LeakageReport(
@@ -813,8 +847,8 @@ def run_leakage_checks(
             "b) time-of-day baseline": check_time_of_day_baseline(inputs, samples[:50], build),
             "c) opening range": check_opening_range(inputs, insts[:10], build),
             "d) labels after t, entry at t+1 open": check_labels(inputs, samples, barriers, labels),
-            "d2) v2 labels: ATR looks back, path ends at the exit": check_labels_volatility(
-                inputs, samples
+            f"d2) {label_version} labels: ATR looks back, path ends at the exit": (
+                check_labels_volatility(inputs, samples, variants=variants_for(label_version))
             ),
             "e) names": check_names(),
         }
@@ -1080,6 +1114,7 @@ def build(
         raise ConfigError(f"only intraday feature version {VERSION} exists")
     if kind == "intraday_labels" and version not in LABEL_VERSIONS:
         raise ConfigError(f"label versions are {', '.join(LABEL_VERSIONS)}")
+    variants = variants_for(version) if version in ATR_LABEL_VERSIONS else ()
     t0 = time_mod.monotonic()
     barriers = barriers or Barriers(
         settings.intraday_target_pct, settings.intraday_stop_pct, settings.intraday_max_bars
@@ -1102,7 +1137,11 @@ def build(
         progress(f"{kind} {month:%Y-%m}")
         inputs = load_inputs(conn, month, min(month_end(month), last_data), universe=universe)
         if gate_samples and summary.months == 0:  # a leak fails the build before any write
-            gate = run_leakage_checks(inputs, pick_samples(inputs, gate_samples))
+            gate = run_leakage_checks(
+                inputs,
+                pick_samples(inputs, gate_samples),
+                label_version=version if version in ATR_LABEL_VERSIONS else "v2",
+            )
             if not gate.passed:
                 raise LeakageError("\n".join(gate.lines()))
         parts = []
@@ -1110,8 +1149,8 @@ def build(
             if kind == "intraday_features":
                 f = decisions(build_minute_features(inputs, inst))
                 f = f[(f["trade_date"] >= month) & (f["trade_date"] <= month_end(month))]
-            elif version == "v2":
-                f = build_labels_volatility(inputs, inst)
+            elif version in ATR_LABEL_VERSIONS:
+                f = build_labels_volatility(inputs, inst, variants)
                 f = f[(f["trade_date"] >= month) & (f["trade_date"] <= month_end(month))]
             else:
                 f = build_labels(inputs, inst, barriers)
@@ -1129,15 +1168,15 @@ def build(
         frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
         frame["minute"] = frame["minute"].astype("int16")
         frame.insert(1, "version", version)
-        if kind == "intraday_labels" and version == "v2":
-            for v in VARIANTS:
+        if kind == "intraday_labels" and version in ATR_LABEL_VERSIONS:
+            for v in variants:
                 frame[f"outcome_{v.name}"] = frame[f"outcome_{v.name}"].astype("Int8")
                 frame[f"bars_held_{v.name}"] = frame[f"bars_held_{v.name}"].astype("Int16")
                 frame[f"gross_return_{v.name}"] = frame[f"gross_return_{v.name}"].astype("float64")
             usable = frame[frame["excluded_reason"].isna()]
             for side in SIDES:
                 part = usable[usable["side"] == side]
-                for v in VARIANTS:
+                for v in variants:
                     col = f"outcome_{v.name}"
                     cell = variant_mix.setdefault((side, v.name), {})
                     cell["target"] = cell.get("target", 0) + int((part[col] == 1).sum())
@@ -1185,7 +1224,7 @@ def build(
             g: float(null_counts[list(cols)].sum() / (totals["rows"] * len(cols)) * 100)
             for g, cols in GROUPS.items()
         }
-    if kind == "intraday_labels" and version == "v2":
+    if kind == "intraday_labels" and version in ATR_LABEL_VERSIONS:
         for (side, name), m in variant_mix.items():
             n = m["rows"] or 1
             summary.variant_mix[f"{side} {name}"] = {
@@ -1219,7 +1258,13 @@ def build(
 
 
 def check_real(
-    conn: Any, n: int, *, universe: str = "nifty50", months_to_check: int = 4, seed: int = 20261125
+    conn: Any,
+    n: int,
+    *,
+    universe: str = "nifty50",
+    months_to_check: int = 4,
+    seed: int = 20261125,
+    label_version: str = "v2",
 ) -> tuple[LeakageReport, int]:
     """The leakage test on stored candles: a few random months, n samples in all."""
     first, last = data_range(conn, universe)
@@ -1235,7 +1280,7 @@ def check_real(
         share = n // len(chosen) + (1 if i < n % len(chosen) else 0)
         samples = pick_samples(inputs, share, seed + i)
         total += len(samples)
-        part = run_leakage_checks(inputs, samples)
+        part = run_leakage_checks(inputs, samples, label_version=label_version)
         for name, failures in part.checks.items():
             report.checks.setdefault(name, []).extend(failures)
     return report, total
@@ -1266,6 +1311,9 @@ def main(argv: list[str] | None = None) -> int:
     leak = sub.add_parser("check-leakage", help="the intraday leakage test on stored candles")
     leak.add_argument("--sample", type=int, default=200)
     leak.add_argument("--universe", default="nifty50")
+    leak.add_argument(
+        "--labels", dest="label_version", default="v2", choices=list(ATR_LABEL_VERSIONS)
+    )
 
     def dates(target: Any) -> None:
         target.add_argument("--from", dest="start", type=_month)
@@ -1290,6 +1338,20 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--min-train-rows", type=int, default=20_000)
     train.add_argument("--no-mlflow", action="store_true")
     train.add_argument("--no-save", action="store_true")
+
+    precision = sub.add_parser(
+        "precision", help="is the model's confidence meaningful, and do the strongest pay?"
+    )
+    dates(precision)
+    precision.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
+    precision.add_argument(
+        "--labels", dest="label_version", default="v2", choices=list(ATR_LABEL_VERSIONS)
+    )
+    precision.add_argument("--variant", default="k15_b10", choices=sorted(VARIANT_BY_NAME))
+    precision.add_argument("--window-months", type=int, default=12)
+    precision.add_argument("--holdout-months", type=int, default=3)
+    precision.add_argument("--max-train-rows", type=int, default=500_000)
+    precision.add_argument("--min-train-rows", type=int, default=20_000)
 
     shown = sub.add_parser("report", help="the backtests stored so far")
     shown.add_argument("--limit", type=int, default=40)
@@ -1362,7 +1424,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     print("\n".join(out.lines()))
                 elif args.group == "train":
-                    from market_intel import intraday_models, intraday_run
+                    from market_intel import intraday_backtest, intraday_models, intraday_run
 
                     config = intraday_models.TrainConfig(
                         label_version=args.label_version,
@@ -1396,6 +1458,29 @@ def main(argv: list[str] | None = None) -> int:
                         print("\n".join(intraday_backtest.report_table(runs)))
                     for row in registered:
                         print(f"  registered {row['name']} v{row['version']} (candidate)")
+                elif args.group == "precision":
+                    from market_intel import intraday_models, intraday_run
+
+                    print(
+                        "\n".join(
+                            intraday_run.run_precision(
+                                settings,
+                                conn,
+                                capital=args.capital,
+                                config=intraday_models.TrainConfig(
+                                    label_version=args.label_version,
+                                    variant=args.variant,
+                                    window_months=args.window_months,
+                                    holdout_months=args.holdout_months,
+                                    max_train_rows=args.max_train_rows,
+                                    min_train_rows=args.min_train_rows,
+                                ),
+                                start=args.start,
+                                end=args.end,
+                                progress=lambda m: print(f"  {m} ...", flush=True),
+                            )
+                        )
+                    )
                 elif args.group == "report":
                     from market_intel import intraday_run
 
@@ -1419,7 +1504,12 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 else:
                     t0 = time_mod.monotonic()
-                    report, total = check_real(conn, args.sample, universe=args.universe)
+                    report, total = check_real(
+                        conn,
+                        args.sample,
+                        universe=args.universe,
+                        label_version=args.label_version,
+                    )
                     print("\n".join(report.lines()))
                     print(f"  samples {total}, duration {time_mod.monotonic() - t0:.0f} s")
                     log.info("intraday_leakage_checked", passed=report.passed, samples=total)

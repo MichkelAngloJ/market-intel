@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 from market_intel.costs import DEFAULT_INTRADAY_COSTS, IntradayCostModel
+from market_intel.intraday import ATR_LABEL_VERSIONS
 from market_intel.sizing import DayState, OutcomeOdds, SizingPolicy, plan_intraday_trade
 
 TRADING_DAYS = 252
@@ -217,7 +218,7 @@ def no_trading(
 
 
 def _label_columns(version: str, variant: str | None) -> tuple[str, str, str]:
-    if version == "v2":
+    if version in ATR_LABEL_VERSIONS:
         if not variant:
             raise ValueError("a v2 backtest needs a barrier variant")
         return (f"outcome_{variant}", f"gross_return_{variant}", f"bars_held_{variant}")
@@ -248,7 +249,7 @@ def prepare(
     picked["side"] = np.where(picked["signal"] > 0, "long", "short")
     keep = ["instrument_id", "ts", "side", "entry_price", "excluded_reason",
             outcome_col, return_col, bars_col]  # fmt: skip
-    if label_version == "v2":
+    if label_version in ATR_LABEL_VERSIONS:
         keep.append("atr")
     merged = picked.merge(labels[keep], on=["instrument_id", "ts", "side"], how="inner")
     merged = merged[merged["excluded_reason"].isna()]
@@ -418,14 +419,14 @@ def _target_pct(
     row: Any, outcome_col: str, return_col: str, version: str, variant: str | None
 ) -> float:
     """The target distance in percent for this row's barriers."""
-    if version == "v2":
+    if version in ATR_LABEL_VERSIONS:
         k = float(variant.split("_")[0][1:]) / 10 if variant else 1.0
         return 100 * k * float(row.atr) / float(row.entry_price)
     return float(getattr(row, "target_pct", 0.5))
 
 
 def _stop_pct(row: Any, version: str, variant: str | None) -> float:
-    if version == "v2":
+    if version in ATR_LABEL_VERSIONS:
         k = float(variant.split("_")[0][1:]) / 10 if variant else 1.0
         return 100 * (k / 2) * float(row.atr) / float(row.entry_price)
     return float(getattr(row, "stop_pct", 0.25))

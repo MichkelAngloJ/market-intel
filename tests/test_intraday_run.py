@@ -148,11 +148,12 @@ def test_the_report_reads_the_stored_runs():
     conn = StubConn()
     conn.rows = [
         ("strategy", "orb_15", "v2", "k15_b10", "walk_forward", date(2024, 3, 1),
-         date(2024, 4, 30), 12, 0.25, -1500.0, -1.5, 2.0, -0.5, 40, 10, 5.0),
+         date(2024, 4, 30), 12, 0.25, -1500.0, -1.5, 2.0, -0.5, 40, 10, 5.0, "-25.04"),
     ]  # fmt: skip
     lines = R.run_report(conn)
     assert lines[0].startswith("kind")
-    assert "orb_15" in lines[-1] and "-1,500" in lines[-1]
+    row = next(line for line in lines if "orb_15" in line)
+    assert "-1,500" in row and "-1.50%" in row
 
 
 def test_an_empty_report_says_so():
@@ -193,3 +194,103 @@ def test_training_needs_built_rows(built, tmp_path):
     empty = built.model_copy(update={"data_dir": tmp_path})
     with pytest.raises(ConfigError):
         R.run_train(empty, StubConn(), save=False)
+
+
+# --- percentage reporting (S5i-b) -----------------------------------------------------------
+
+
+def report_rows():
+    return [
+        ("strategy", "orb_15", "v2", "k15_b10", "walk_forward", date(2024, 3, 1),
+         date(2024, 4, 30), 120, 0.19, -75362.0, -75.4, 75.1, -4.67, 40, 10, 5.0, "-25.04"),
+        ("baseline", "no_trading", "-", None, "walk_forward", date(2024, 3, 1),
+         date(2024, 4, 30), 0, None, 0.0, 0.0, 0.0, None, 40, 40, 0.0, None),
+        ("model", "lgbm_intraday", "v2", "k15_b10", "walk_forward", date(2024, 3, 1),
+         date(2024, 4, 30), 20, 0.32, -29057.0, -29.1, 29.3, -1.78, 40, 37, 5.0, "-18.79"),
+    ]  # fmt: skip
+
+
+def test_the_report_is_in_percentages_worst_first():
+    conn = StubConn()
+    conn.rows = report_rows()
+    lines = R.run_report(conn)
+    names = [line.split()[1] for line in lines[2:5]]
+    assert names == ["orb_15", "lgbm_intraday", "no_trading"]  # worst first, doing nothing last
+    assert "return" in lines[0] and "vs none" in lines[0]
+
+
+def test_the_report_shows_the_gap_to_doing_nothing():
+    conn = StubConn()
+    conn.rows = report_rows()
+    lines = R.run_report(conn)
+    orb = next(line for line in lines if "orb_15" in line)
+    assert "-75.40%" in orb and "-75.40%" in orb  # return and the gap to 0%
+    nothing = next(line for line in lines if "no_trading" in line)
+    assert "0.00%" in nothing and "+0.00%" in nothing
+    assert "a negative number means the strategy lost money" in "\n".join(lines)
+
+
+def test_the_report_shows_the_per_trade_edge_when_it_was_stored():
+    conn = StubConn()
+    conn.rows = report_rows()
+    lines = R.run_report(conn)
+    assert "-25.04" in next(line for line in lines if "orb_15" in line)
+    assert "-18.79" in next(line for line in lines if "lgbm_intraday" in line)
+
+
+def test_the_replay_shows_charges_and_the_move_as_percentages(built):
+    lines = R.run_replay(
+        built, StubConn(), capital=100_000, label_version="v2", variant="k15_b10",
+        strategy="vwap_reversion",
+    )  # fmt: skip
+    text = "\n".join(lines)
+    if "day total" not in text:
+        pytest.skip("no signals on the last built day")
+    assert "of traded value" in text
+    assert "price moved" in text and "charges paid" in text and "net result" in text
+    assert "% of capital" in text
+    # the charge line reports both shares, so the comparison is visible
+    charges = next(line for line in lines if "charges paid" in line)
+    assert charges.count("%") == 2
+
+
+def test_the_replay_says_when_charges_exceeded_the_whole_move(built):
+    """The point of the percentage output: seeing that the fee ate the move."""
+    lines = R.run_replay(
+        built, StubConn(), capital=100_000, label_version="v2", variant="k15_b10",
+        strategy="vwap_reversion",
+    )  # fmt: skip
+    text = "\n".join(lines)
+    if "day total" not in text:
+        pytest.skip("no signals on the last built day")
+    move = float(
+        next(line for line in lines if "price moved" in line)
+        .split("Rs")[1]
+        .split("(")[0]
+        .replace(",", "")
+    )
+    charges = float(
+        next(line for line in lines if "charges paid" in line)
+        .split("Rs")[1]
+        .split("(")[0]
+        .replace(",", "")
+    )
+    assert ("charges were LARGER" in text) == (charges > move)
+
+
+def test_the_precision_command_reports_calibration_for_both_sides(built):
+    config = M_config()
+    lines = R.run_precision(built, StubConn(), capital=100_000, config=config)
+    text = "\n".join(lines)
+    assert "confidence calibration and precision" in text
+    assert "decile 1" in text and "top 1%" in text
+    assert "round trip costs" in text
+
+
+def M_config():
+    from market_intel import intraday_models as M
+
+    return M.TrainConfig(
+        label_version="v2", variant="k15_b10", window_months=1, holdout_months=1,
+        max_train_rows=20_000, min_train_rows=100,
+    )  # fmt: skip

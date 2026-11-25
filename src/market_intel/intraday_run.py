@@ -112,7 +112,7 @@ def run_backtest(
             labels,
             signals[strategy.name],
             label_version=label_version,
-            variant=variant if label_version == "v2" else None,
+            variant=variant if label_version != "v1" else None,
             target_pct=settings.intraday_target_pct,
             stop_pct=settings.intraday_stop_pct,
         )
@@ -130,7 +130,7 @@ def run_backtest(
                 name=strategy.name,
                 kind="strategy",
                 label_version=label_version,
-                variant=variant if label_version == "v2" else None,
+                variant=variant if label_version != "v1" else None,
                 policy=_policy(capital),
                 costs=DEFAULT_INTRADAY_COSTS,
                 slippage_bps=bps,
@@ -241,35 +241,105 @@ def _as_backtest_rows(rows: pd.DataFrame, config: M.TrainConfig) -> pd.DataFrame
     """The dataset already carries outcome / gross_return / bars_held under plain names, but the
     backtest looks the v2 columns up by variant, so give it the names it expects."""
     out = rows.copy()
-    if config.label_version == "v2":
+    if config.label_version in I.ATR_LABEL_VERSIONS:
         out[f"outcome_{config.variant}"] = out["outcome"]
         out[f"gross_return_{config.variant}"] = out["gross_return"]
         out[f"bars_held_{config.variant}"] = out["bars_held"]
     return out
 
 
+def run_precision(
+    settings: Settings,
+    conn: Any,
+    *,
+    capital: float = DEFAULT_CAPITAL,
+    label_version: str = "v2",
+    variant: str = "k15_b10",
+    start: date | None = None,
+    end: date | None = None,
+    config: M.TrainConfig | None = None,
+    slippage_bps: float = HEADLINE_SLIPPAGE,
+    progress: Any = lambda message: None,
+) -> list[str]:
+    """Train (walk-forward) and ask whether the model's confidence means anything.
+
+    Nothing is stored and no model is registered: this describes a training run so the owner
+    can see whether the strongest "yes" signals pay for themselves.
+    """
+    config = config or M.TrainConfig(label_version=label_version, variant=variant)
+    progress("loading features and labels")
+    features, labels = _load(settings, config.label_version, start, end)
+    signals = S.all_signals(features)
+    dataset = M.build_dataset(features, labels, signals, config)
+    if dataset.empty:
+        raise ConfigError("no usable rows: build the features and labels first")
+    result = M.run_training(dataset, config, progress=progress)
+    out = list(result.lines())
+    walk = M.precision_report(
+        dataset,
+        M.probabilities_for(result),
+        capital=capital,
+        slippage_bps=slippage_bps,
+        period="walk_forward",
+    )
+    out += [""] + walk.lines()
+    holdout = M.probabilities_for(result, holdout=True)
+    if not holdout.empty:
+        note = ""
+        if len(holdout) < 2000:
+            note = (
+                f"only {len(holdout):,} scored rows in the holdout:"
+                " read the bands below as an illustration, not as evidence"
+            )
+        out += [""] + M.precision_report(
+            dataset,
+            holdout,
+            capital=capital,
+            slippage_bps=slippage_bps,
+            period="holdout (scored once)",
+            warning=note,
+        ).lines()
+    return out
+
+
 def run_report(conn: Any, *, limit: int = 40) -> list[str]:
-    """The stored backtest runs, newest first."""
+    """The stored backtest runs as plain percentages, worst first, against "no trading".
+
+    Doing nothing is the reference: it returns exactly 0%, pays nothing and risks nothing, so
+    the column that matters is how far each strategy falls short of it.
+    """
     rows = conn.execute(
         "SELECT kind, name, label_version, variant, period, from_date, to_date, trades,"
         " hit_rate, net_profit, return_pct, max_drawdown_pct, sharpe, days,"
-        " days_without_trade, slippage_bps FROM backtest_runs ORDER BY id DESC LIMIT %s",
+        " days_without_trade, slippage_bps, params ->> 'edge_bps' FROM backtest_runs"
+        " ORDER BY id DESC LIMIT %s",
         (limit,),
     ).fetchall()
     if not rows:
         return ["no backtests stored yet: run `intraday backtest` first"]
     header = (
         f"{'kind':<9} {'name':<22} {'labels':<9} {'period':<13} {'slip':>5} {'trades':>7}"
-        f" {'hit':>5} {'net Rs':>12} {'return':>8} {'maxDD':>7} {'Sharpe':>7}"
+        f" {'hit':>5} {'return':>8} {'vs none':>9} {'maxDD':>7} {'edge bps':>9} {'net Rs':>12}"
     )
-    out = [header, "-" * len(header)]
-    for r in rows:
+    out = [
+        header,
+        "-" * len(header),
+    ]
+    ordered = sorted(rows, key=lambda r: r[10] if r[10] is not None else 0.0)
+    for r in ordered:
         hit = f"{r[8]:.0%}" if r[8] is not None else "-"
-        sharpe = f"{r[12]:+.2f}" if r[12] is not None else "-"
+        edge = f"{float(r[16]):+.2f}" if r[16] is not None else "-"
+        gap = (r[10] or 0.0) - 0.0  # no_trading is 0% by definition
         out.append(
             f"{r[0]:<9} {r[1]:<22} {(r[3] or r[2]):<9} {r[4]:<13} {r[15]:>5.0f} {r[7]:>7,}"
-            f" {hit:>5} {float(r[9]):>12,.0f} {r[10]:>7.1f}% {r[11]:>6.1f}% {sharpe:>7}"
+            f" {hit:>5} {r[10]:>7.2f}% {gap:>+8.2f}% {r[11]:>6.1f}% {edge:>9}"
+            f" {float(r[9]):>12,.0f}"
         )
+    out.append("")
+    out.append(
+        '"vs none" is the gap to doing nothing, which returns 0%: a negative number means the'
+        " strategy lost money that no trading would have kept."
+    )
     return out
 
 
@@ -317,7 +387,7 @@ def run_replay(
         labels,
         signals,
         label_version=label_version,
-        variant=variant if label_version == "v2" else None,
+        variant=variant if label_version != "v1" else None,
         target_pct=settings.intraday_target_pct,
         stop_pct=settings.intraday_stop_pct,
     )
@@ -337,7 +407,7 @@ def run_replay(
         rows,
         name=f"replay_{strategy}",
         label_version=label_version,
-        variant=variant if label_version == "v2" else None,
+        variant=variant if label_version != "v1" else None,
         policy=policy,
         costs=DEFAULT_INTRADAY_COSTS,
         slippage_bps=slippage_bps,
@@ -377,10 +447,20 @@ def run_replay(
         )
         out.append("")
         state.record(trade.net_profit)
-    out.append(
-        f"day total: {len(result.trades)} trade(s), net Rs {result.net_profit:,.0f}"
-        f" after Rs {result.costs_paid:,.0f} of costs"
-    )
+    notional = sum(t.entry * t.quantity for t in result.trades)
+    move = sum(abs(t.exit_price - t.entry) * t.quantity for t in result.trades)
+    out += [
+        f"day total: {len(result.trades)} trade(s) on Rs {notional:,.0f} of traded value",
+        f"  price moved   Rs {move:>10,.0f}"
+        f"  ({100 * move / notional if notional else 0:.3f}% of the traded value)",
+        f"  charges paid  Rs {result.costs_paid:>10,.0f}"
+        f"  ({100 * result.costs_paid / capital:.3f}% of capital,"
+        f" {100 * result.costs_paid / notional if notional else 0:.3f}% of the traded value)",
+        f"  net result    Rs {result.net_profit:>10,.0f}"
+        f"  ({100 * result.net_profit / capital:+.3f}% of capital)",
+    ]
+    if result.costs_paid > move:
+        out.append("  -> the charges were LARGER than the whole price move the trades captured.")
     for reason, n in sorted(result.skipped.items()):
         out.append(f"  skipped {n}: {reason}")
     return out
