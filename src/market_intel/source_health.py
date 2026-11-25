@@ -36,7 +36,6 @@ counts and masked error text only, never data.
 from __future__ import annotations
 
 import json
-import os
 import statistics
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
@@ -45,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from market_intel.alerts import queue_alert
-from market_intel.file_lock import file_lock
+from market_intel.file_lock import file_lock, safe_replace
 from market_intel.logging_setup import get_logger, mask_text
 
 STATE_NAME = "source_health.json"
@@ -128,7 +127,7 @@ class SourceHealth:
             state[source] = entry
             tmp = self.path.with_name(self.path.name + ".tmp")
             tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, self.path)
+            safe_replace(tmp, self.path)
 
     # --- recording ------------------------------------------------------------------------
 

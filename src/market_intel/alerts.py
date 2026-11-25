@@ -42,7 +42,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from market_intel.config import ConfigError, Settings, get_settings, mask_email
-from market_intel.file_lock import file_lock
+from market_intel.file_lock import file_lock, safe_replace
 from market_intel.logging_setup import configure_logging, get_logger, mask_text, mask_value
 
 Level = Literal["info", "warning", "critical"]
@@ -117,7 +117,7 @@ class ThrottleStore:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2, sort_keys=True)
-            os.replace(tmp, self.path)
+            safe_replace(tmp, self.path)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise

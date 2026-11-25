@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time as time_mod
 from collections import Counter
@@ -46,7 +45,7 @@ from zoneinfo import ZoneInfo
 from market_intel import upstox
 from market_intel.config import ConfigError, Settings, get_settings
 from market_intel.db import postgres
-from market_intel.file_lock import file_lock
+from market_intel.file_lock import file_lock, safe_replace
 from market_intel.ingestion import ingestion_run
 from market_intel.logging_setup import (
     bound_context,
@@ -403,7 +402,7 @@ class Progress:
         with file_lock(self.path.with_name(self.path.name + ".lock")):
             tmp = self.path.with_name(self.path.name + ".tmp")
             tmp.write_text(json.dumps({"to": self.target, "done": self.done}), encoding="utf-8")
-            os.replace(tmp, self.path)
+            safe_replace(tmp, self.path)
 
 
 # --- fetching with fallback --------------------------------------------------------------

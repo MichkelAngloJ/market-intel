@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
-import os
 import secrets
 import socketserver
 import sys
@@ -49,6 +48,7 @@ import keyring
 from market_intel import __version__
 from market_intel.alerts import queue_alert
 from market_intel.config import ConfigError, Settings, get_settings
+from market_intel.file_lock import safe_replace
 from market_intel.logging_setup import (
     bound_context,
     configure_logging,
@@ -115,7 +115,7 @@ def save_token(settings: Settings, token: str, issued_at: datetime) -> datetime:
     }
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    safe_replace(tmp, path)
     return expires_at
 
 

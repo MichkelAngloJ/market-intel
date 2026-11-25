@@ -156,7 +156,7 @@ Docker Desktop first; run everything from `<repo folder>`.
 | Status (both should be `healthy`, ports on `127.0.0.1` only) | `docker compose -f docker/compose.yaml --env-file docker/compose.env ps` |
 | Stop (keeps the data) | `docker compose -f docker/compose.yaml --env-file docker/compose.env down` |
 | Back up | `uv run python -m market_intel.backup` |
-| Restore test of the newest backup | `uv run python -m market_intel.backup --verify` |
+| Restore test of the newest backup (run it AFTER a fresh backup) | `uv run python -m market_intel.backup --verify` |
 
 Never run `docker compose config` without `--quiet`, `docker inspect` or `docker compose exec
 ... env`: they print the passwords.
@@ -199,6 +199,10 @@ in Postgres, `db.changeUserPassword()` in MongoDB), then in `.env`. After the fi
   ones.
 - **Take backups while nothing is writing** to the databases, so the counts in the manifest
   match the dumps exactly. There is no ingestion yet; once there is, back up between runs.
+- **`--verify` does not take a backup.** It only restore-tests the newest one already in
+  `BACKUP_DIR`, so run it right after `backup`; otherwise it checks an older file and says
+  nothing about today's data. (The S4i check first passed against a backup taken before the
+  1-minute candles existed.)
 - `uv run python -m market_intel.backup --verify` checks the newest backup:
   - each dump file's size and SHA-256 against the manifest;
   - it restores both dumps into throwaway databases (`market_intel_restore_test` in both) and

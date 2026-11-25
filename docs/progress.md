@@ -20,9 +20,8 @@ Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S4i (intraday data, features, triple-barrier labels, leakage test) done, awaiting
-  planner review. Next: S5i (intraday strategies + ML meta-model + backtest + capital-based
-  sizing + replay demo). 0.11 (remove the testing-laptop dependency) stays planned for not
+- Now: S5i (intraday strategies, ML meta-model, backtest after costs, capital sizing, replay
+  demo) in progress. 0.11 (remove the testing-laptop dependency) stays planned for not
   before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -48,6 +47,13 @@ Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- S4i review (planner, 2026-11-25): passed. Answers: (1) a price event on the decision day
+  is not a feature: accepted; (2) the v1 barriers are too wide (~70% time-outs): S5i tests
+  volatility-scaled barriers and shorter limits, and keeps v1 as a baseline; (3) NULL sector
+  relative strength for Telecommunication, Capital Goods and Consumer Services: accepted;
+  (4) the file-lock retry becomes ONE shared safe-replace helper used by every state writer;
+  (5) the failed run 47 and the row difference: accepted; (6) the runbook must say "back up
+  first, then verify".
 - S3 review (planner, 2026-11-25): passed as engineering. Verified: DB 0008; 18 candidate (v2)
   + 18 retired (v1) models, none active; 0 old test lines changed; no model or MLflow files
   tracked. Result: the models do NOT beat the baselines after costs (top-20 11.2%/yr vs
@@ -168,7 +174,8 @@ Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
 | S1 | done 2026-11-24 (HEAD 3e1262f) | passed (planner, 2026-11-24) | Upstox browser login (token in Windows Credential Manager), status and health check; V3 daily candles with an honest-session yfinance backup; loader with precedence, gaps, resume and split/bonus flags; migration 0006 (universe members, price events); nifty500 universe; exchange rematch |
 | S2 | done 2026-11-24 (HEAD e91fb33) | passed (planner, 2026-11-24) | Timing convention; features v1 (32, news not for training) and separate forward labels (21/63/126 days, exclusion reasons) with migration 0007; leakage test (truncation, late news, label names, shifted data) in CI and on real data; special sessions out of the gap and label calendar; BHARATBOND out of indices; yfinance curl-cffi off |
 | S3 | done 2026-11-25 (HEAD c472d0a) | passed as engineering (planner, 2026-11-25) | Baselines + per-sector LightGBM (pooled fallback), walk-forward after costs, SHAP, MLflow, model registry (migration 0008); the models do NOT beat the baselines |
-| S4i | done 2026-11-25 (HEAD 55bedc8) | awaiting planner review | 1-minute candles for the nifty50 universe, the Nifty 50, India VIX and 12 sector indices from 2022 (resumable, one month per request, thin days); the intraday timing convention; features v1 (41) and long/short triple-barrier labels as monthly Parquet with build records (migration 0009); the intraday leakage test (5 checks, 4 leaky fakes) in CI and on real data |
+| S4i | done 2026-11-25 (HEAD 55bedc8) | passed (planner, 2026-11-25) | 1-minute candles for the nifty50 universe, the Nifty 50, India VIX and 12 sector indices from 2022 (resumable, one month per request, thin days); the intraday timing convention; features v1 (41) and long/short triple-barrier labels as monthly Parquet with build records (migration 0009); the intraday leakage test (5 checks, 4 leaky fakes) in CI and on real data |
+| S5i | in progress | – | Intraday strategies, ML meta-model, backtest after costs, capital sizing, replay demo |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -288,10 +295,10 @@ Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
 - Intraday price events: a split/bonus day is detected from that day's close, so it cannot be
   a feature at a decision point during the day. The event day and the next trading day are
   excluded from the labels instead, and only the previous day's event is a feature.
-- Windows file locks: replacing the intraday progress file failed once with 'Access is
-  denied' (a scanner or the indexer holding it) and stopped a backfill after 309 requests; it
-  now retries. The other state files (alerts, daily candles, news, source health, the Upstox
-  token) replace the same way and have not been changed.
+- Windows file locks: every state writer (alerts, daily and intraday candles, news, source
+  health, the Upstox token, the instruments cache) now swaps its temp file in through
+  `file_lock.safe_replace`, which retries while the target is locked (S5i). A locked file
+  had stopped an S4i backfill after 309 requests.
 - 1-minute candles make the Postgres backup much bigger and slower; `backup --verify` now
   takes 1 min 48 s, 686.9 MB; restore test 2 min 30 s.
 - Price events: the split/bonus detector records only falling ratios and some events are

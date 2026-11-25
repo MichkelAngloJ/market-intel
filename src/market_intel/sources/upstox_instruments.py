@@ -22,7 +22,6 @@ from __future__ import annotations
 import gzip
 import io
 import json
-import os
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -35,6 +34,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from market_intel.file_lock import safe_replace
 from market_intel.sources.records import Instrument
 
 SOURCE = "upstox"
@@ -107,7 +107,7 @@ def save_validators(data_dir: Path, url: str, result: Download, prefix: str = "N
     name = state_file(prefix)
     tmp = folder / (name + ".tmp")
     tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    os.replace(tmp, folder / name)
+    safe_replace(tmp, folder / name)
 
 
 def _rotate(folder: Path, keep: int = KEEP_FILES, prefix: str = "NSE") -> None:
@@ -171,7 +171,7 @@ def download(
                     out.write(chunk)
             etag = response.headers.get("ETag")
             last_modified = response.headers.get("Last-Modified")
-        os.replace(part, target)
+        safe_replace(part, target)
     finally:
         part.unlink(missing_ok=True)
         if own_client:

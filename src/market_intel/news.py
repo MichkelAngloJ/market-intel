@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from collections.abc import Callable, Iterable, Sequence
@@ -44,7 +43,7 @@ from pymongo.errors import DuplicateKeyError
 
 from market_intel.config import ConfigError, Settings, get_settings
 from market_intel.db import mongo, postgres
-from market_intel.file_lock import file_lock
+from market_intel.file_lock import file_lock, safe_replace
 from market_intel.ingestion import ingestion_run
 from market_intel.logging_setup import (
     bound_context,
@@ -114,7 +113,7 @@ class FeedState:
             yield state
             tmp = self.path.with_name(self.path.name + ".tmp")
             tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, self.path)
+            safe_replace(tmp, self.path)
 
 
 def skip_reason(feed: Feed, entry: dict[str, Any], now: datetime, *, force: bool) -> str | None:
@@ -616,7 +615,7 @@ class GoogleState:
             yield state
             tmp = self.path.with_name(self.path.name + ".tmp")
             tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, self.path)
+            safe_replace(tmp, self.path)
 
 
 @dataclass
