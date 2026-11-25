@@ -296,7 +296,7 @@ could be any machine on the network, so it needs TLS.
 Defined in `src/market_intel/db/schema.py` (SQLAlchemy Core) and created by Alembic migrations
 in `migrations/` (0001 schema, 0002 grants for `mi_app`, 0003 trigger and TEMP grant, 0004
 instrument seen dates, symbol reuse, symbol history and watchlist, 0005 BSE scrip codes, 0006
-universe members and price events, 0007 features and labels, 0008 the model registry).
+universe members and price events, 0007 features and labels, 0008 the model registry, 0009 feature builds).
 
 | Table | Holds |
 |---|---|
@@ -304,7 +304,7 @@ universe members and price events, 0007 features and labels, 0008 the model regi
 | `instrument_symbol_history` | Every symbol change a refresh saw: old and new symbol, IST date |
 | `watchlist` | The owner's watchlist (max 50 stocks, note up to 200 characters); its contents never go in the repo |
 | `candles_daily` | Daily OHLCV per instrument and IST trading date, with source and raw/adjusted flag |
-| `candles_intraday` | 1-minute bars only (start time in UTC) |
+| `candles_intraday` | 1-minute bars only (start time in UTC); regular session only (S4i) |
 | `ingestion_runs` | Every data-loading run: job, status, rows written, masked error |
 | `data_gaps` | Missing data found per instrument and interval, and how it was resolved |
 | `universe_members` | Which instruments belong to a named universe (`nifty500`, from the sector import), as of a date |
@@ -315,6 +315,7 @@ universe members and price events, 0007 features and labels, 0008 the model regi
 | `features_daily` | Features v1 per instrument, trading day and feature version (one double column per feature) |
 | `labels_daily` | Forward returns over 21 / 63 / 126 regular trading days and up/down, or NULL with an exclusion reason; a separate table so features can never contain labels |
 | `llm_spend` | Every LLM call's cost; the view `v_llm_spend_monthly` sums it per IST month |
+| `feature_builds` | Each intraday feature or label build: kind, version, dates, rows, files and their SHA-256 (the files are Parquet under the data folder) |
 
 Key rules:
 - Timestamps are `timestamptz` in **UTC**; trading days are `date`, the **IST** exchange date.
@@ -839,6 +840,83 @@ Unit tests feed deliberately leaky features (tomorrow's close, a centred moving 
 from any time, a label-named feature, a builder that calls the label code) and require the
 test to catch each one. The test only catches the patterns it checks, so every new feature must
 go through `build_features`.
+
+## Intraday data, features and labels
+
+Sprint task S4i (decisions 2026-11-25). Commands: `market_intel.candles intraday` (1-minute
+candles) and `market_intel.intraday` (`features build`, `labels build`, `check-leakage`); logs
+to `logs/candles.jsonl` and `logs/intraday.jsonl`.
+
+**1-minute candles** (`candles_intraday`, interval `1m`, `ts` = bar start in UTC):
+
+- Instruments: the `nifty50` universe (from `instruments import-sectors --universe nifty50`),
+  the Nifty 50 index, India VIX and the NSE sector indices that match the members' sectors
+  (`intraday_candles.SECTOR_INDEX`; Power uses Nifty Energy and Construction Nifty Infra as the
+  closest; Telecommunication, Capital Goods and Consumer Services have no sector index).
+- Upstox V3 historical candles, `minutes/1`, one calendar month per request (the documented
+  maximum), from January 2022 (the earliest Upstox serves). Upstox only: there is no backup
+  source for minutes.
+- Resumable: complete past months are recorded per instrument in
+  `data/state/intraday_progress.json`; a rerun starts after the last stored day. Each month is
+  COPY-ed into a temporary table and upserted on the primary key (`source = 'upstox'`,
+  `price_basis = 'raw'`); unchanged bars are not rewritten.
+- Regular session only: bar starts 09:15-15:29 IST. Other bars are dropped and counted, and so
+  are special-session days (S2 rules) and invalid OHLC rows.
+- A **thin day** is a day with fewer than 300 bars for an instrument: a `data_gaps` row with
+  interval `1m`, status `unfillable` and the note "thin day: N bars".
+- Source health name: `upstox_intraday`. A run with some failed months is `partial`.
+
+**Timing convention** (enforced in code and by the leakage test):
+
+- Decision points every 5 minutes from 09:30 to 15:00 IST (bar starts; 67 a day).
+- The features at decision bar t use ONLY bars up to and including t (closed), daily candles
+  up to the previous trading day, and price events up to the previous trading day.
+- Entry is at the OPEN of bar t+1.
+- Every position closes by the close of the 15:20 bar.
+
+**Features v1** (`intraday.FEATURES_V1`, pure functions over each day's bars; groups as in the
+build summary):
+
+| Group | Features |
+|---|---|
+| returns | log returns over 1, 5, 15, 30 minutes (within the day), since the day's open; the overnight gap (open vs the previous daily close) |
+| vwap | distance from the session VWAP up to t; VWAP change over 15 minutes |
+| opening range | position in the first 15 / 30 minutes' range and breakout flags; NaN until the range is complete (09:29 / 09:44 bar closed) |
+| volume | bar volume and cumulative volume vs the average at the same minute over the previous 20 days (at least 10; previous days only) |
+| volatility | standard deviation of 1-minute returns over 15 / 30 minutes; range so far / open |
+| relative strength | return since the open and over 15 minutes minus Nifty 50's and minus the sector index's (NaN without a sector index) |
+| market | Nifty 50 return since the open and over 15 minutes; India VIX at t (1-minute; else the previous daily close) |
+| previous day | from daily candles before t's day: return, range, distance of the price from the previous high and low, ATR14 / close |
+| time and flags | minutes since 09:15, day of week, a price event on the previous trading day, `thin_so_far` (fewer than 80% of the bars expected by t) |
+| rule signals (for S5i) | ORB (15-minute) breakout up/down crossings, VWAP cross up/down, volume burst (3x the time-of-day normal), gap bucket (-2..2 at -1%, -0.3%, 0.3%, 1%) |
+
+A price event on t's own day is not a feature: our split/bonus detector uses that day's
+close, so it isn't known at t. Such days are excluded from the labels instead.
+
+**Labels (triple barrier)** for each decision point and both sides: entry = open(t+1); the path
+is bars t+1 .. min(t + `INTRADAY_MAX_BARS`, the 15:20 bar). Long: +1 if the high reaches
+entry x (1 + `INTRADAY_TARGET_PCT`%) first, -1 if the low reaches entry x (1 -
+`INTRADAY_STOP_PCT`%) first, 0 at the time limit; short is the mirror. If one bar touches
+both, the stop counts first. The gross return is the barrier (+target or -stop) or, at the time
+limit, the last bar's close vs the entry. Defaults 0.5%, 0.25%, 15 bars (settings; names in
+`.env.example`). Excluded with a reason: `special_session`, `price_event` (the event day and
+the next trading day), `thin_day` (fewer than 300 bars) and `no_entry` (no bar at t+1).
+
+**Storage:** Parquet (zstd), one file per month: `DATA_DIR/features/intraday/v1/year=YYYY/
+month=MM/part-0.parquet` and `DATA_DIR/labels/intraday/v1/...` (git-ignored). Each build is
+a `feature_builds` row (migration 0009): kind, version, date range, rows, files and the
+SHA-256 of every file written. Builds are incremental from the month of the last build (a
+month is rewritten whole); `--from YYYY-MM` rebuilds from that month. Candles stay in
+Postgres.
+
+**Leakage test** (`intraday check-leakage`; also a 10-sample gate at the start of every build,
+which then refuses to write): (a) truncation: features at t are unchanged after deleting every
+bar after t; (b) multiplying bar t's volume by 10 multiplies `vol_rel_tod` by exactly 10, so
+the time-of-day baseline uses only previous days; (c) opening-range features are NaN before
+the range completes; (d) the label's entry is the open of bar t+1, and changing any bar up to t
+changes no label; (e) no feature name looks like a label. The unit tests feed deliberately
+leaky fakes (the next bar's close, a centred average, today's full-day volume, entry at bar
+t's close) and require each to be caught.
 
 ## Models, evaluation, costs and the registry
 

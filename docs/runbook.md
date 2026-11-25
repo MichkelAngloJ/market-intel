@@ -455,6 +455,42 @@ normal: their future isn't known yet).
 day, and the features that changed; the cause is a feature that looks ahead. Fix the feature in
 `build_features` (a code task) and run the test again.
 
+## Intraday data, features and labels
+
+How it works: [architecture](architecture.md#intraday-data-features-and-labels).
+
+| Task | Command |
+|---|---|
+| The nifty50 universe (once, and when the index changes) | `uv run python -m market_intel.instruments import-sectors --file data/ind_nifty50list.csv --universe nifty50` |
+| 1-minute candles (new days; needs today's Upstox login) | `uv run python -m market_intel.candles intraday` |
+| Plan only, nothing saved | `uv run python -m market_intel.candles intraday --dry-run` |
+| One instrument from a date | `uv run python -m market_intel.candles intraday --symbol RELIANCE --from 2024-01-01` |
+| Intraday features (new months) | `uv run python -m market_intel.intraday features build` |
+| Rebuild features from a month | `uv run python -m market_intel.intraday features build --from YYYY-MM` |
+| Triple-barrier labels | `uv run python -m market_intel.intraday labels build` |
+| Leakage test on the real data | `uv run python -m market_intel.intraday check-leakage --sample 500` |
+
+**Order:** candles, then `features build`, then `labels build`. The first backfill from 2022
+takes about an hour; it can be stopped and run again (complete months are skipped). India
+VIX's symbol is `INDIA VIX` for `--symbol`.
+
+**Reading the summaries.** The candles summary shows the rows written, requests, bars dropped
+outside 09:15-15:29 and thin days (fewer than 300 bars; often half days or data gaps). The
+features summary shows the % NULL per group (the volume group needs 10 previous days, the
+30-minute windows aren't ready at 09:30, and relative strength vs the sector is NULL for
+stocks without a sector index). The labels summary shows, per side, how often the target or
+the stop came first or the time limit ended the trade, and the average gross return (before
+costs).
+
+**Disk usage.** 1-minute candles live in Postgres (about 29 million rows from 2022 for ~64
+instruments; they make the backups bigger and slower). Features and labels are Parquet under
+`data/features/intraday` and `data/labels/intraday` (sizes in the build summaries); deleting
+them is safe: a `--from` rebuild recreates them.
+
+**If `check-leakage` or a build's leakage gate fails:** nothing is written. Don't use the
+features; the output names the check, the instrument, the time and the features that changed.
+Fix the feature in `market_intel.intraday` (a code task) and run the test again.
+
 ## News feeds and source health
 
 How it works: [architecture](architecture.md#news-and-exchange-feeds) and

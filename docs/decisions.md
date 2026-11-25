@@ -344,3 +344,13 @@
 - Decision: SHAP TreeExplainer gives global importance per model and the top 5 plain-language reasons per prediction from tested templates. MLflow runs locally (sqlite + artifacts under the data folder, UI on 127.0.0.1 only). Models are versioned in model_versions with status candidate/active/retired and a model card each.
 - Concern (planner): SHAP explains the model, not the market; reasons are "why the model thinks so", not proof.
 - Reason (owner): Explain every prediction and version every model, as the spec requires.
+
+## 2026-11-25 - New priority order and capital input
+- Decision: Priority is now 1 intraday, 2 mutual funds, 3 long-term stocks, 4 IPO (replacing stocks -> IPO -> mutual funds). The sprint continues as S4i intraday data, S5i intraday strategies and backtest with capital-based sizing, S6 mutual funds, S7 dashboard, scheduler and end-to-end test. Every module takes the owner's capital amount through one shared sizing component (risk per trade for intraday, amount per stock with at least one share, fund splits with minimum amounts, IPO minimum lot).
+- Concern (planner): Intraday is the hardest module to make profitable (SEBI: 71% of individual intraday traders in the cash segment lost money in FY2023); the system must be free to say "no trade". The long-term stock models currently don't beat their baselines after costs.
+- Reason (owner): Intraday and mutual funds matter most to me now.
+
+## 2026-11-25 - Intraday data, features and labels
+- Decision: Nifty 50 stocks plus the Nifty 50, India VIX and matching sector indices, as 1-minute Upstox candles from Jan 2022, regular session only. Decisions every 5 minutes (09:30–15:00), features from closed bars only, entry at the next bar's open, everything closed by 15:20. Triple-barrier labels for long and short sides (default target 0.5%, stop 0.25%, 15 bars; stop first if both hit in one bar). Intraday features and labels are stored as Parquet under the data folder with a build record in Postgres; candles stay in Postgres.
+- Concern (planner): Parquet for features departs from the spec's "features in Postgres" to keep a laptop fast; builds are recorded and reproducible. Fixed-percentage barriers ignore each stock's volatility; S5i may add volatility-scaled barriers.
+- Reason (owner): Fast intraday research on a laptop.

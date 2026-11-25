@@ -8,8 +8,12 @@ The owner's brief, kept current. Changes need the owner's approval and a decisio
 A personal market-intelligence system for Indian markets that predicts, explains and
 validates.
 
-- Modules, in order: 1 Stocks, 2 IPOs, 3 Mutual funds. The next module starts only after the
-  current one passes validation.
+- Modules, in order (owner, 2026-11-25): 1 Intraday, 2 Mutual funds, 3 Long-term stocks,
+  4 IPOs (it was stocks, IPOs, mutual funds). The next module starts only after the current
+  one passes validation.
+- Every module takes the owner's capital amount through one shared sizing component (built
+  in S5i): risk per trade for intraday, an amount per stock with at least one share, fund
+  splits with minimum amounts, the IPO minimum lot.
 - Signals and paper trading only; never real orders.
 - Objective (owner, 2026-11-22): maximise profit after all costs with capped loss. Nothing
   is guaranteed, and the system says so.
@@ -157,6 +161,10 @@ Decision 2026-11-22:
   expected gain after costs is positive.
 - Fixed risk per trade, a daily loss limit and a maximum number of trades.
 - 15 minutes is the main horizon; 5 minutes is an experiment.
+- Data, features and labels (S4i, decision 2026-11-25): Nifty 50 stocks, Nifty 50, India
+  VIX and matching sector indices as 1-minute candles from January 2022; decisions every 5
+  minutes 09:30-15:00, entry at the next bar's open, everything closed by 15:20; features
+  and labels as Parquet with a build record (see [architecture](architecture.md)).
 - Order-book depth is recorded from 1.7, because no history exists.
 - SEBI's study found that 71% of individual intraday traders in the cash segment lost
   money in FY2023; everything is paper-traded first and promotion needs the owner's

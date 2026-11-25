@@ -66,6 +66,8 @@ Details, including how to copy secrets safely, are in the
 | `uv run python -m market_intel.upstox login` | The daily Upstox login in the browser (token kept in Windows Credential Manager; `status` shows the hours left) |
 | `uv run python -m market_intel.candles daily` | Daily candles for all NSE indices and the Nifty 500 (Upstox, yfinance backup for stocks), with gaps and resume |
 | `uv run python -m market_intel.features build` | Features v1 for the Nifty 500 (then `labels`; `check-leakage` runs the leakage test) |
+| `uv run python -m market_intel.candles intraday` | 1-minute candles for the Nifty 50, its index, India VIX and sector indices from 2022 (Upstox; resumable) |
+| `uv run python -m market_intel.intraday features build` | Intraday features v1 as Parquet (then `labels build`; `check-leakage` runs the intraday leakage test) |
 | `uv run python -m market_intel.models train --horizon 21` | Walk-forward models vs baselines after costs, SHAP, MLflow, candidate versions (`report` shows the tables) |
 | `uv run python -m market_intel.watchlist list` | Shows the watchlist (`add SYMBOL`, `remove SYMBOL`; max 50, stored only in the database) |
 
