@@ -97,19 +97,26 @@ def run_backtest(
     signals = S.all_signals(features)
     report = BacktestReport()
     days = features["trade_date"].nunique()
+    # the join does not depend on the slippage, so do it once per strategy
+    prepared: dict[str, pd.DataFrame] = {}
+    for strategy in S.STRATEGIES:
+        progress(f"joining {strategy.name}")
+        rows = B.prepare(
+            features,
+            labels,
+            signals[strategy.name],
+            label_version=label_version,
+            variant=variant if label_version == "v2" else None,
+            target_pct=settings.intraday_target_pct,
+            stop_pct=settings.intraday_stop_pct,
+        )
+        if not rows.empty:
+            prepared[strategy.name] = rows
     for bps in sorted({*slippage_grid, headline_slippage}):
         best: B.BacktestResult | None = None
         for strategy in S.STRATEGIES:
-            rows = B.prepare(
-                features,
-                labels,
-                signals[strategy.name],
-                label_version=label_version,
-                variant=variant if label_version == "v2" else None,
-                target_pct=settings.intraday_target_pct,
-                stop_pct=settings.intraday_stop_pct,
-            )
-            if rows.empty:
+            rows = prepared.get(strategy.name)
+            if rows is None:
                 continue
             progress(f"{strategy.name} at {bps:g} bps ({len(rows):,} signals)")
             result = B.simulate(
