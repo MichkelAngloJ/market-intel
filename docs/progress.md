@@ -14,8 +14,13 @@ Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
   extras, 1.6b NSE files, 1.7 live feed + depth, 1.9 MCP, Phase 2 AI extraction
   (Ollama/FinBERT/OCR/page capture), LSTM, online learning, manipulation flags, IPO, mutual
   funds, agent.
-- Now: S3 (baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow) done,
-  awaiting planner review. Next: S4 (predictions + audit + outcomes + paper trading). 0.11 (remove the testing-laptop dependency) stays planned
+- Owner decision 2026-11-25: new priority order: 1 intraday, 2 mutual funds, 3 long-term
+  stocks, 4 IPO. Revised sprint: S4i intraday data + features + labels; S5i intraday
+  strategies + ML meta-model + backtest + capital-based sizing + replay demo; S6 mutual funds
+  (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
+  flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
+  trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
+- Now: S4i (intraday data, features, triple-barrier labels, leakage test) in progress. 0.11 (remove the testing-laptop dependency) stays planned
   for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -41,6 +46,15 @@ Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- S3 review (planner, 2026-11-25): passed as engineering. Verified: DB 0008; 18 candidate (v2)
+  + 18 retired (v1) models, none active; 0 old test lines changed; no model or MLflow files
+  tracked. Result: the models do NOT beat the baselines after costs (top-20 11.2%/yr vs
+  equal-weight 17.8%; holdout worse); 6 of 17 sector models beat their own sector baselines.
+  Notes: (a) the SHAP top reasons lean on history_days and month, likely spurious: drop both
+  from stock-model inputs when long-term stocks return (priority 3); (b) zeroing event/extreme
+  windows is a stopgap: proper corporate actions (NSE official files in 1.6b, yfinance split
+  history as a cross-check) and recomputed labels come later; (c) daily-stock paper trading
+  happens in S7, labelled "candidate - does not beat baselines".
 - S2 review (planner, 2026-11-24): passed. Verified: DB 0007; 5 random 21-day labels
   recomputed from raw candles all match; the leakage test catches all 6 leaky fakes and
   passes on 500 real samples; 0 old test lines changed. Answers: (1) include "always up"
@@ -151,7 +165,8 @@ Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
 | 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | passed (planner, 2026-11-22) | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
 | S1 | done 2026-11-24 (HEAD 3e1262f) | passed (planner, 2026-11-24) | Upstox browser login (token in Windows Credential Manager), status and health check; V3 daily candles with an honest-session yfinance backup; loader with precedence, gaps, resume and split/bonus flags; migration 0006 (universe members, price events); nifty500 universe; exchange rematch |
 | S2 | done 2026-11-24 (HEAD e91fb33) | passed (planner, 2026-11-24) | Timing convention; features v1 (32, news not for training) and separate forward labels (21/63/126 days, exclusion reasons) with migration 0007; leakage test (truncation, late news, label names, shifted data) in CI and on real data; special sessions out of the gap and label calendar; BHARATBOND out of indices; yfinance curl-cffi off |
-| S3 | done 2026-11-25 (HEAD c472d0a) | awaiting planner review | Baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow |
+| S3 | done 2026-11-25 (HEAD c472d0a) | passed as engineering (planner, 2026-11-25) |
+| S4i | in progress | – | Intraday data: 1-minute candles, intraday features, triple-barrier labels, leakage test | Baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
