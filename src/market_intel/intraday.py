@@ -45,6 +45,7 @@ from market_intel.logging_setup import bound_context, configure_logging, get_log
 
 COMPONENT = "intraday"
 VERSION = "v1"
+LABEL_VERSIONS = ("v1", "v2")  # v2 = volatility-scaled barriers (S5i)
 IST = ZoneInfo("Asia/Kolkata")
 OPEN_IST = time(9, 15)
 SESSION_BARS = 375  # 09:15 .. 15:29
@@ -119,6 +120,9 @@ GROUPS: dict[str, tuple[str, ...]] = {
     ),
 }
 LABEL_COLUMNS = ("side", "outcome", "gross_return", "bars_held", "entry_price", "excluded_reason")
+ATR_BARS = 15  # the ATR window for v2 barriers, in one-minute bars
+K_GRID = (1.0, 1.5, 2.0)  # target = k x ATR, stop = k/2 x ATR
+BARS_GRID = (5, 10, 15)  # time limits in bars
 FORBIDDEN_WORDS = ("outcome", "gross_return", "label", "future", "target", "barrier")
 
 log = get_logger("market_intel.intraday")
@@ -446,6 +450,143 @@ def build_labels(
     return out
 
 
+@dataclass(frozen=True)
+class Variant:
+    """One volatility-scaled barrier setting: target = k x ATR, stop = k/2 x ATR."""
+
+    k: float
+    max_bars: int
+
+    @property
+    def name(self) -> str:
+        return f"k{round(self.k * 10):02d}_b{self.max_bars:02d}"
+
+
+VARIANTS: tuple[Variant, ...] = tuple(Variant(k, bars) for k in K_GRID for bars in BARS_GRID)
+VARIANT_BY_NAME = {v.name: v for v in VARIANTS}
+
+
+def variant_columns(variants: Sequence[Variant] = VARIANTS) -> list[str]:
+    return [f"{p}_{v.name}" for v in variants for p in ("outcome", "gross_return", "bars_held")]
+
+
+def true_range(grid: np.ndarray) -> np.ndarray:
+    """True range per bar of one day's (SESSION_BARS, 4) open/high/low/close grid."""
+    high, low, close = grid[:, 1], grid[:, 2], grid[:, 3]
+    prev_close = np.concatenate([[np.nan], close[:-1]])
+    # fmax ignores a NaN when the other value is real, and keeps NaN only where all three are
+    return np.fmax(np.fmax(high - low, np.abs(high - prev_close)), np.abs(low - prev_close))
+
+
+def atr_series(grid: np.ndarray, bars: int = ATR_BARS) -> np.ndarray:
+    """Average true range over the last ``bars`` bars ENDING at each minute (look-back only;
+    NaN until the window is full)."""
+    tr = true_range(grid)
+    out = np.full(len(tr), np.nan)
+    frame = pd.Series(tr).rolling(bars, min_periods=bars).mean()
+    out[: len(tr)] = frame.to_numpy()
+    return out
+
+
+def build_labels_volatility(
+    inputs: IntradayInputs,
+    inst: int,
+    variants: Sequence[Variant] = VARIANTS,
+    only: Iterable[pd.Timestamp] | None = None,
+    atr_bars: int = ATR_BARS,
+) -> pd.DataFrame:
+    """Labels v2: the same triple barrier, but scaled by each stock's own recent volatility.
+
+    At decision bar t the ATR of the last ``atr_bars`` one-minute bars (bars up to and
+    including t) sets the distances: target = k x ATR, stop = k/2 x ATR, so the reward-to-risk
+    ratio is always 2:1 while the width follows the stock and the time of day. Entry is still
+    open(t+1), the stop still counts first when one bar touches both, and everything is still
+    flat by the 15:20 bar. Every variant is a column, so one row per (decision point, side).
+    An extra exclusion reason, ``no_atr``, covers the first bars of a day where the ATR window
+    is not yet full."""
+    bars = inputs.bars.get(inst)
+    base = ["trade_date", "ts", "minute", "side", "entry_price", "atr", "excluded_reason"]
+    cols = base + variant_columns(variants)
+    if bars is None or bars.empty:
+        return pd.DataFrame(columns=cols)
+    s = _session(bars.sort_index())
+    wanted = None if only is None else set(only)
+    events = inputs.events.get(inst, set())
+    daily = inputs.daily.get(inst)
+    prev_of = {}
+    if daily is not None and not daily.empty:
+        dd = sorted(daily.index)
+        for d in sorted(set(s["day"])):
+            i = bisect.bisect_left(dd, d)
+            prev_of[d] = dd[i - 1] if i > 0 else None
+    longest = max(v.max_bars for v in variants)
+    rows = []
+    for d, g in s.groupby("day", sort=True):
+        grid = np.full((SESSION_BARS, 4), np.nan)
+        mins = g["minute"].to_numpy()
+        ok = (mins >= 0) & (mins < SESSION_BARS)
+        grid[mins[ok]] = g[["open", "high", "low", "close"]].to_numpy(dtype=float)[ok]
+        ts_of = dict(zip(mins, g.index, strict=True))
+        atr = atr_series(grid, atr_bars)
+        reason_day = None
+        if d in inputs.special:
+            reason_day = "special_session"
+        elif d in events or prev_of.get(d) in events:
+            reason_day = "price_event"
+        elif len(g) < THIN_DAY_BARS:
+            reason_day = "thin_day"
+        for m in DECISION_MINUTES:
+            if m not in ts_of or (wanted is not None and ts_of[m] not in wanted):
+                continue
+            t = ts_of[m]
+            reason = reason_day
+            entry = grid[m + 1, 0] if m + 1 < SESSION_BARS else np.nan
+            if reason is None and not entry > 0:
+                reason = "no_entry"
+            width = atr[m]
+            if reason is None and not width > 0:
+                reason = "no_atr"
+            last = min(m + longest, EXIT_MINUTE)
+            hi_all, lo_all, cl_all = (
+                grid[m + 1 : last + 1, 1],
+                grid[m + 1 : last + 1, 2],
+                grid[m + 1 : last + 1, 3],
+            )
+            for side in SIDES:
+                if reason:
+                    rows.append((d, t, m, side, None, None, reason) + (None,) * (len(cols) - 7))
+                    continue
+                values: list[object] = []
+                for v in variants:
+                    n = min(v.max_bars, EXIT_MINUTE - m)
+                    hi, lo, cl = hi_all[:n], lo_all[:n], cl_all[:n]
+                    target_dist, stop_dist = v.k * width, v.k / 2 * width
+                    if side == "long":
+                        stop_hit = lo <= entry - stop_dist
+                        target_hit = hi >= entry + target_dist
+                    else:
+                        stop_hit = hi >= entry + stop_dist
+                        target_hit = lo <= entry - target_dist
+                    i_stop = int(np.argmax(stop_hit)) if stop_hit.any() else None
+                    i_target = int(np.argmax(target_hit)) if target_hit.any() else None
+                    if i_stop is not None and (i_target is None or i_stop <= i_target):
+                        values += [-1, -stop_dist / entry, i_stop + 1]  # stop first
+                    elif i_target is not None:
+                        values += [1, target_dist / entry, i_target + 1]
+                    else:
+                        valid = np.where(~np.isnan(cl))[0]
+                        exit_close = cl[valid[-1]] if len(valid) else entry
+                        held = int(valid[-1]) + 1 if len(valid) else 0
+                        gross = exit_close / entry - 1
+                        values += [0, gross if side == "long" else -gross, held]
+                rows.append((d, t, m, side, float(entry), float(width), None, *values))
+    out = pd.DataFrame(rows, columns=cols)
+    out["excluded_reason"] = (
+        out["excluded_reason"].astype(object).where(out["excluded_reason"].notna(), None)
+    )
+    return out
+
+
 # --- the leakage test --------------------------------------------------------------------
 
 FeatureFn = Callable[[IntradayInputs, int], pd.DataFrame]
@@ -594,6 +735,60 @@ def check_labels(
     return failures
 
 
+def check_labels_volatility(
+    inputs: IntradayInputs,
+    samples: Sequence[tuple[int, pd.Timestamp]],
+    labels: LabelFn = None,  # type: ignore[assignment]
+    variants: Sequence[Variant] = VARIANTS,
+) -> list[str]:
+    """(d2) Labels v2: the barrier width may use bars up to t (that is the point of an ATR
+    barrier), so the v1 check does not apply. What must hold is narrower:
+
+    - the entry is the open of bar t+1;
+    - the ATR at t does NOT move when later bars change (it is a look-back window);
+    - no label changes when bars after the longest path has ended are changed.
+    """
+    labels = labels or build_labels_volatility
+    longest = max(v.max_bars for v in variants)
+    failures = []
+    for inst, t in samples:
+        bars = inputs.bars[inst]
+        base = labels(inputs, inst, variants, only=[t])
+        if base.empty or base["excluded_reason"].notna().all():
+            continue
+        later = bars[bars.index > t]
+        first = base.iloc[0]
+        if later.empty or not np.isclose(float(first["entry_price"]), float(later["open"].iloc[0])):
+            failures.append(f"instrument {inst} at {t}: entry is not the next bar's open")
+        # everything from the exit bar onwards may be rewritten freely
+        local = bars.index.tz_convert(IST)
+        minute = int(local[bars.index.get_loc(t)].hour * 60 + local[bars.index.get_loc(t)].minute)
+        minute -= OPEN_IST.hour * 60 + OPEN_IST.minute
+        cut = min(minute + longest, EXIT_MINUTE)
+        beyond = bars.index > t + pd.Timedelta(minutes=cut - minute)
+        if not beyond.any():
+            continue
+        shaken = bars.copy()
+        shaken.loc[beyond, ["open", "high", "low", "close"]] *= 1.5
+        moved = labels(
+            replace(inputs, bars={**inputs.bars, inst: shaken}), inst, variants, only=[t]
+        )
+        if moved.empty:
+            failures.append(f"instrument {inst} at {t}: the label disappeared")
+            continue
+        after = moved.iloc[0]
+        if not np.isclose(float(first["atr"]), float(after["atr"]), rtol=1e-9):
+            failures.append(f"instrument {inst} at {t}: the ATR moved with later bars")
+        for v in variants:
+            a, b = first[f"outcome_{v.name}"], after[f"outcome_{v.name}"]
+            if a != b:
+                failures.append(
+                    f"instrument {inst} at {t}: {v.name} changed with bars after the exit"
+                )
+                break
+    return failures
+
+
 def check_names() -> list[str]:
     return [
         f"feature {n} looks like a label"
@@ -616,6 +811,9 @@ def run_leakage_checks(
             "b) time-of-day baseline": check_time_of_day_baseline(inputs, samples[:50], build),
             "c) opening range": check_opening_range(inputs, insts[:10], build),
             "d) labels after t, entry at t+1 open": check_labels(inputs, samples, barriers, labels),
+            "d2) v2 labels: ATR looks back, path ends at the exit": check_labels_volatility(
+                inputs, samples
+            ),
             "e) names": check_names(),
         }
     )
@@ -773,6 +971,7 @@ class BuildSummary:
     seconds: float = 0.0
     null_pct: dict[str, float] = field(default_factory=dict)
     label_mix: dict[str, dict[str, float]] = field(default_factory=dict)
+    variant_mix: dict[str, dict[str, float]] = field(default_factory=dict)
     excluded: dict[str, int] = field(default_factory=dict)
 
     def lines(self) -> list[str]:
@@ -792,6 +991,12 @@ class BuildSummary:
                 f" time limit {mix['time']:.1f}%,"
                 f" average gross return {mix['avg_return'] * 100:.3f}%"
                 f" (usable rows {int(mix['rows']):,})"
+            )
+        for name, mix in sorted(self.variant_mix.items()):
+            out.append(
+                f"  {name}: target first {mix['target']:.1f}%, stop first {mix['stop']:.1f}%,"
+                f" time limit {mix['time']:.1f}%,"
+                f" average gross return {mix['avg_return'] * 100:+.4f}%"
             )
         if self.excluded:
             out.append(
@@ -832,8 +1037,10 @@ def build(
 ) -> BuildSummary:
     """Build one month at a time (incremental: from the month of the last build), write Parquet,
     record the build. ``kind``: intraday_features or intraday_labels."""
-    if version != VERSION:
+    if kind == "intraday_features" and version != VERSION:
         raise ConfigError(f"only intraday feature version {VERSION} exists")
+    if kind == "intraday_labels" and version not in LABEL_VERSIONS:
+        raise ConfigError(f"label versions are {', '.join(LABEL_VERSIONS)}")
     t0 = time_mod.monotonic()
     barriers = barriers or Barriers(
         settings.intraday_target_pct, settings.intraday_stop_pct, settings.intraday_max_bars
@@ -851,6 +1058,7 @@ def build(
     totals = {"null": None, "rows": 0}
     null_counts = pd.Series(0.0, index=list(FEATURES_V1))
     mix = {s: {"target": 0, "stop": 0, "time": 0, "ret": 0.0, "rows": 0} for s in SIDES}
+    variant_mix: dict[tuple[str, str], dict[str, float]] = {}
     for month in month_starts(begin, last_data):
         progress(f"{kind} {month:%Y-%m}")
         inputs = load_inputs(conn, month, min(month_end(month), last_data), universe=universe)
@@ -862,6 +1070,9 @@ def build(
         for inst in inputs.bars:
             if kind == "intraday_features":
                 f = decisions(build_minute_features(inputs, inst))
+                f = f[(f["trade_date"] >= month) & (f["trade_date"] <= month_end(month))]
+            elif version == "v2":
+                f = build_labels_volatility(inputs, inst)
                 f = f[(f["trade_date"] >= month) & (f["trade_date"] <= month_end(month))]
             else:
                 f = build_labels(inputs, inst, barriers)
@@ -879,7 +1090,25 @@ def build(
         frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
         frame["minute"] = frame["minute"].astype("int16")
         frame.insert(1, "version", version)
-        if kind == "intraday_labels":
+        if kind == "intraday_labels" and version == "v2":
+            for v in VARIANTS:
+                frame[f"outcome_{v.name}"] = frame[f"outcome_{v.name}"].astype("Int8")
+                frame[f"bars_held_{v.name}"] = frame[f"bars_held_{v.name}"].astype("Int16")
+                frame[f"gross_return_{v.name}"] = frame[f"gross_return_{v.name}"].astype("float64")
+            usable = frame[frame["excluded_reason"].isna()]
+            for side in SIDES:
+                part = usable[usable["side"] == side]
+                for v in VARIANTS:
+                    col = f"outcome_{v.name}"
+                    cell = variant_mix.setdefault((side, v.name), {})
+                    cell["target"] = cell.get("target", 0) + int((part[col] == 1).sum())
+                    cell["stop"] = cell.get("stop", 0) + int((part[col] == -1).sum())
+                    cell["time"] = cell.get("time", 0) + int((part[col] == 0).sum())
+                    cell["ret"] = cell.get("ret", 0.0) + float(part[f"gross_return_{v.name}"].sum())
+                    cell["rows"] = cell.get("rows", 0) + len(part)
+            for reason, n in frame["excluded_reason"].value_counts().items():
+                summary.excluded[reason] = summary.excluded.get(reason, 0) + int(n) // 2
+        elif kind == "intraday_labels":
             frame["outcome"] = frame["outcome"].astype("Int8")
             frame["bars_held"] = frame["bars_held"].astype("Int16")
             frame["gross_return"] = frame["gross_return"].astype("float64")
@@ -917,7 +1146,17 @@ def build(
             g: float(null_counts[list(cols)].sum() / (totals["rows"] * len(cols)) * 100)
             for g, cols in GROUPS.items()
         }
-    if kind == "intraday_labels":
+    if kind == "intraday_labels" and version == "v2":
+        for (side, name), m in variant_mix.items():
+            n = m["rows"] or 1
+            summary.variant_mix[f"{side} {name}"] = {
+                "target": 100 * m["target"] / n,
+                "stop": 100 * m["stop"] / n,
+                "time": 100 * m["time"] / n,
+                "avg_return": m["ret"] / n,
+                "rows": m["rows"],
+            }
+    elif kind == "intraday_labels":
         for side, m in mix.items():
             n = m["rows"] or 1
             summary.label_mix[side] = {
@@ -979,6 +1218,7 @@ def main(argv: list[str] | None = None) -> int:
     feats.add_argument("--universe", default="nifty50")
     labels = sub.add_parser("labels", help="triple-barrier labels")
     labels.add_argument("action", choices=["build"])
+    labels.add_argument("--version", default=VERSION, choices=list(LABEL_VERSIONS))
     labels.add_argument(
         "--from", dest="start", type=lambda s: date.fromisoformat(s if len(s) > 7 else s + "-01")
     )

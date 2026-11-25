@@ -124,15 +124,17 @@ def test_rule_signals_and_gap_bucket_take_known_values(feats):
 DAY = date(2024, 3, 5)
 
 
-def flat_inputs(changes=None) -> it.IntradayInputs:
-    """One flat day at 100; ``changes``: {minute: (open, high, low, close)}."""
+def flat_inputs(changes=None, wiggle: float = 0.0) -> it.IntradayInputs:
+    """One flat day at 100; ``changes``: {minute: (open, high, low, close)}. ``wiggle`` widens
+    every untouched bar by that much either side, so the v2 ATR is not zero."""
     changes = changes or {}
     days = [date(2024, 3, 4), DAY]
     idx, rows = [], []
     for d in days:
         for m in range(375):
             idx.append(datetime.combine(d, time(9, 15), fakes.IST) + timedelta(minutes=m))
-            rows.append(changes.get(m, (100.0, 100.0, 100.0, 100.0)) if d == DAY else (100.0,) * 4)
+            flat = (100.0, 100.0 + wiggle, 100.0 - wiggle, 100.0)
+            rows.append(changes.get(m, flat) if d == DAY else flat)
     bars = pd.DataFrame(rows, columns=["open", "high", "low", "close"],
                         index=pd.DatetimeIndex(idx).tz_convert("UTC"))  # fmt: skip
     bars["volume"] = 1000.0
@@ -300,3 +302,87 @@ def test_month_helpers():
         date(2023, 11, 1), date(2023, 12, 1), date(2024, 1, 1), date(2024, 2, 1)
     ]  # fmt: skip
     assert it.month_end(date(2024, 2, 1)) == date(2024, 2, 29)
+
+
+# --- labels v2: volatility-scaled barriers (S5i) -------------------------------------------
+
+
+def test_the_variant_grid_is_three_ks_by_three_time_limits():
+    assert len(it.VARIANTS) == 9
+    assert [v.name for v in it.VARIANTS[:3]] == ["k10_b05", "k10_b10", "k10_b15"]
+    assert it.VARIANT_BY_NAME["k15_b10"] == it.Variant(1.5, 10)
+    assert len(it.variant_columns()) == 27  # outcome, return and bars held per variant
+
+
+def test_true_range_and_atr_look_back_only():
+    grid = np.full((it.SESSION_BARS, 4), np.nan)
+    grid[:5] = [[100, 101, 99, 100], [100, 102, 100, 101], [101, 101, 98, 99],
+                [99, 100, 98, 100], [100, 100, 100, 100]]  # fmt: skip
+    tr = it.true_range(grid)
+    assert tr[0] == pytest.approx(2.0)  # high - low, no previous close
+    assert tr[1] == pytest.approx(2.0)  # max(2, |102-100|, |100-100|)
+    assert tr[2] == pytest.approx(3.0)  # max(3, |101-101|, |98-101|)
+    atr = it.atr_series(grid, bars=3)
+    assert np.isnan(atr[1])  # the window is not full
+    assert atr[2] == pytest.approx((2.0 + 2.0 + 3.0) / 3)
+
+
+def test_v2_barriers_are_two_to_one_and_scale_with_the_atr(inp):
+    frame = it.build_labels_volatility(inp, 1)
+    row = frame[frame["excluded_reason"].isna()].iloc[0]
+    atr = row["atr"]
+    # a stop-first row loses exactly k/2 x ATR, a target-first row wins k x ATR
+    for v in it.VARIANTS:
+        hit, ret = row[f"outcome_{v.name}"], row[f"gross_return_{v.name}"]
+        if hit == 1:
+            assert ret == pytest.approx(v.k * atr / row["entry_price"])
+        elif hit == -1:
+            assert ret == pytest.approx(-v.k / 2 * atr / row["entry_price"])
+
+
+def test_a_wider_k_times_out_more_often(inp):
+    frame = it.build_labels_volatility(inp, 1)
+    ok = frame[frame["excluded_reason"].isna()]
+    narrow = (ok["outcome_k10_b05"] == 0).mean()
+    wide = (ok["outcome_k20_b05"] == 0).mean()
+    assert wide > narrow  # a barrier twice as far is reached less often in the same 5 bars
+
+
+def test_v2_excludes_the_bars_before_the_atr_window_is_full():
+    inputs = flat_inputs(wiggle=0.1)
+    short_day = inputs.bars[1]
+    frame = it.build_labels_volatility(inputs, 1, atr_bars=400)  # never fills
+    assert set(frame["excluded_reason"].dropna()) == {"no_atr"}
+    assert len(short_day) > 0
+
+
+def test_v2_still_counts_the_stop_first_when_one_bar_hits_both():
+    # ATR = 0.2, so k=1 puts the target 0.2 away and the stop 0.1 away; bar 62 spans both
+    inputs = flat_inputs({62: (100.0, 100.3, 99.8, 100.0)}, wiggle=0.1)
+    frame = it.build_labels_volatility(inputs, 1, variants=[it.Variant(1.0, 15)])
+    row = frame[(frame["trade_date"] == DAY) & (frame["minute"] == 60)]
+    assert row["atr"].tolist() == pytest.approx([0.2, 0.2])
+    assert set(row["outcome_k10_b15"]) == {-1}  # both sides stop out
+
+
+def test_v2_closes_by_the_1520_bar():
+    inputs = flat_inputs(wiggle=0.1)
+    frame = it.build_labels_volatility(inputs, 1, variants=[it.Variant(2.0, 100)])
+    row = frame[(frame["trade_date"] == DAY) & (frame["minute"] == 345)].iloc[0]
+    assert row["bars_held_k20_b100"] == 20  # 15:01 .. 15:20, not 100 bars
+
+
+def leaky_atr(inputs, inst, variants=it.VARIANTS, only=None):
+    """A fake whose barrier width peeks at the bars AFTER t."""
+    bars = inputs.bars[inst].copy()
+    shifted = bars.shift(-20).reindex(bars.index)
+    bars[["high", "low"]] = shifted[["high", "low"]].fillna(bars[["high", "low"]])
+    return it.build_labels_volatility(
+        replace(inputs, bars={**inputs.bars, inst: bars}), inst, variants, only
+    )
+
+
+def test_the_v2_check_catches_an_atr_that_peeks_ahead(inp):
+    samples = it.pick_samples(inp, 6)
+    assert it.check_labels_volatility(inp, samples, labels=leaky_atr)
+    assert not it.check_labels_volatility(inp, samples)
