@@ -354,3 +354,8 @@
 - Decision: Nifty 50 stocks plus the Nifty 50, India VIX and matching sector indices, as 1-minute Upstox candles from Jan 2022, regular session only. Decisions every 5 minutes (09:30–15:00), features from closed bars only, entry at the next bar's open, everything closed by 15:20. Triple-barrier labels for long and short sides (default target 0.5%, stop 0.25%, 15 bars; stop first if both hit in one bar). Intraday features and labels are stored as Parquet under the data folder with a build record in Postgres; candles stay in Postgres.
 - Concern (planner): Parquet for features departs from the spec's "features in Postgres" to keep a laptop fast; builds are recorded and reproducible. Fixed-percentage barriers ignore each stock's volatility; S5i may add volatility-scaled barriers.
 - Reason (owner): Fast intraday research on a laptop.
+
+## 2026-11-25 - Intraday strategies, backtest and sizing
+- Decision: Rule strategies (opening-range breakout, VWAP trend and reversion, gap, volume burst, relative strength, mood and no-trade filters) are baselines for a LightGBM meta-model on triple-barrier labels (fixed v1 and volatility-scaled v2), evaluated with a monthly walk-forward and a 3-month holdout in an event-driven backtest after current intraday costs. Signals are trade plans sized from the owner's capital (1% risk per trade, 2% daily loss limit, max 5 trades by default); trades happen only when the expected value after costs is positive. A replay command demonstrates a past day.
+- Concern (planner): Most intraday strategies lose after costs; "no trading" is a valid outcome. No live orders.
+- Reason (owner): Intraday is priority 1.

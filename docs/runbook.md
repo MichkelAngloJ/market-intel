@@ -495,6 +495,44 @@ them is safe: a `--from` rebuild recreates them.
 features; the output names the check, the instrument, the time and the features that changed.
 Fix the feature in `market_intel.intraday` (a code task) and run the test again.
 
+## Intraday strategies, backtest and replay
+
+How it works: [architecture](architecture.md#intraday-strategies-backtest-and-sizing).
+
+| Task | Command |
+|---|---|
+| Volatility-scaled labels (after the v1 labels) | `uv run python -m market_intel.intraday labels build --version v2` |
+| Rule strategies against the baselines, after costs | `uv run python -m market_intel.intraday backtest --capital 100000` |
+| The same on the fixed v1 barriers | `uv run python -m market_intel.intraday backtest --labels v1` |
+| Train the meta-model (walk-forward, then the holdout once) | `uv run python -m market_intel.intraday train --capital 100000` |
+| The backtests stored so far | `uv run python -m market_intel.intraday report` |
+| Replay one past day, trade by trade | `uv run python -m market_intel.intraday replay --date YYYY-MM-DD --capital 100000` |
+
+**Order:** candles, `features build`, `labels build`, `labels build --version v2`, then
+`backtest` and `train`. `replay` needs the features and labels of the day; with no `--date` it
+takes the last built day.
+
+**Reading the backtest.** The table ranks every rule strategy and the model against
+`no_trading`, after all charges and the assumed slippage. Under it is a grid showing the best
+strategy's profit at 0, 2, 5 and 10 bps of slippage per side, because that assumption decides
+most of the answer: charges alone take about 0.13% of a position per round trip, so at 10 bps
+a side a trade must move 0.33% just to break even. `RUINED` marks a run that lost three
+quarters of the account and was stopped. **"No trading" winning is a result, not a bug**, and
+it is the usual one: SEBI found that 71% of individual intraday traders in the cash segment
+lost money in FY2023.
+
+**Reading the training output.** Walk-forward AUC near 0.5 means the model found nothing.
+A warning about folds that "predicted a single value" means those months had too few training
+rows for LightGBM to split at all (raise `--window-months` or lower `--min-train-rows`), and
+their AUC says nothing about the market. The holdout is scored once; never retrain because of
+it, and never promote a model: everything stays `candidate`.
+
+**Capital and risk.** Every command takes `--capital`. The defaults risk 1% per trade, stop
+for the day after losing 2%, and take at most 5 trades a day. A tight stop cannot use the whole
+risk budget, because the position would exceed the capital: with a 0.25% stop the exposure cap
+binds and the trade risks about 0.25% of capital. Intraday (MIS) leverage is not modelled, and
+no command ever places an order.
+
 ## News feeds and source health
 
 How it works: [architecture](architecture.md#news-and-exchange-feeds) and

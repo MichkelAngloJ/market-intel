@@ -161,6 +161,11 @@ Decision 2026-11-22:
   expected gain after costs is positive.
 - Fixed risk per trade, a daily loss limit and a maximum number of trades.
 - 15 minutes is the main horizon; 5 minutes is an experiment.
+- Strategies, backtest and sizing (S5i, decision 2026-11-25): eight rule strategies are the
+  baselines for a LightGBM meta-model on the triple-barrier labels (fixed v1 and
+  volatility-scaled v2), judged by a monthly walk-forward and a holdout scored once, in an
+  event-driven backtest after the brokers' current intraday charges. "No trading" is one of
+  the baselines and is allowed to win.
 - Data, features and labels (S4i, decision 2026-11-25): Nifty 50 stocks, Nifty 50, India
   VIX and matching sector indices as 1-minute candles from January 2022; decisions every 5
   minutes 09:30-15:00, entry at the next bar's open, everything closed by 15:20; features

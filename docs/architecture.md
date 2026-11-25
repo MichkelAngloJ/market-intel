@@ -296,7 +296,7 @@ could be any machine on the network, so it needs TLS.
 Defined in `src/market_intel/db/schema.py` (SQLAlchemy Core) and created by Alembic migrations
 in `migrations/` (0001 schema, 0002 grants for `mi_app`, 0003 trigger and TEMP grant, 0004
 instrument seen dates, symbol reuse, symbol history and watchlist, 0005 BSE scrip codes, 0006
-universe members and price events, 0007 features and labels, 0008 the model registry, 0009 feature builds).
+universe members and price events, 0007 features and labels, 0008 the model registry, 0009 feature builds, 0010 intraday backtests).
 
 | Table | Holds |
 |---|---|
@@ -316,6 +316,8 @@ universe members and price events, 0007 features and labels, 0008 the model regi
 | `labels_daily` | Forward returns over 21 / 63 / 126 regular trading days and up/down, or NULL with an exclusion reason; a separate table so features can never contain labels |
 | `llm_spend` | Every LLM call's cost; the view `v_llm_spend_monthly` sums it per IST month |
 | `feature_builds` | Each intraday feature or label build: kind, version, dates, rows, files and their SHA-256 (the files are Parquet under the data folder) |
+| `backtest_runs` | One intraday backtest: strategy or model, labels, capital, slippage, and the result after every charge |
+| `backtest_trades` | Every simulated trade of a run (never a real order) |
 
 Key rules:
 - Timestamps are `timestamptz` in **UTC**; trading days are `date`, the **IST** exchange date.
@@ -917,6 +919,89 @@ the range completes; (d) the label's entry is the open of bar t+1, and changing 
 changes no label; (e) no feature name looks like a label. The unit tests feed deliberately
 leaky fakes (the next bar's close, a centred average, today's full-day volume, entry at bar
 t's close) and require each to be caught.
+
+## Intraday strategies, backtest and sizing
+
+Sprint task S5i (decisions 2026-11-25). Commands: `market_intel.intraday` (`backtest`, `train`,
+`report`, `replay`); modules `intraday_strategies`, `intraday_backtest`, `intraday_models`,
+`intraday_run`, `sizing` and the intraday half of `costs`.
+
+**Labels v2 — volatility-scaled barriers.** The v1 barriers (a fixed 0.5% / 0.25%) time out
+about 70% of the time, because 0.5% is a long way for a Nifty 50 stock to travel in 15 minutes.
+v2 scales them by the stock's own recent movement: at decision bar t, with the ATR of the last
+15 one-minute bars (bars up to and including t), the target is k x ATR and the stop k/2 x ATR,
+so the reward-to-risk ratio is always 2:1 while the width follows the stock and the time of
+day. Nine variants are built as columns of one file: k in 1.0 / 1.5 / 2.0 by a time limit of
+5 / 10 / 15 bars. v1 stays as a baseline, and which variant to use is decided only by the
+walk-forward. An extra exclusion reason, `no_atr`, covers the start of a day before the ATR
+window is full.
+
+The v1 leakage check ("no label changes when any bar up to t changes") cannot hold for v2,
+because an ATR barrier is *supposed* to depend on earlier bars. The v2 check is narrower and
+checks the three things that must be true: the entry is still the open of bar t+1, the ATR
+does not move when later bars change, and no label changes when bars after its exit change.
+A deliberately leaky fake whose ATR peeks at later bars must be caught.
+
+**The eight rule strategies** (`intraday_strategies`) are the baselines the model has to beat:
+opening-range breakout over 15 and 30 minutes, VWAP trend, VWAP mean reversion, gap-and-go,
+gap-fill, volume burst, and relative strength against both the Nifty and the sector. Each
+reads the features of a decision row and answers long, short or nothing. Two filters apply to
+all of them: a **no-trade filter** (a price event on the previous day, a thin session so far,
+an opening range that has not completed) and a **market-mood filter** (India VIX above a
+ceiling, or the Nifty moving hard against the side since the open). Every threshold is a field
+of `RuleSettings`, never a hidden constant.
+
+**Costs.** Charges for an intraday (MIS) order on NSE through Upstox, checked 2026-11-25 on
+the official pages: brokerage Rs 20 per order or 0.1% of turnover, whichever is **lower**, on
+each side; STT 0.025% on the **sell** side only; NSE transaction charge 0.00307% each side
+(IPFT combined); SEBI Rs 10 per crore each side; stamp duty 0.003% on the **buy** side only;
+GST 18% on brokerage plus the transaction charge; and **no DP charge**, because nothing is
+delivered. A round trip therefore costs about **0.13% of the position in charges alone**, plus
+slippage on both sides. That is the number every strategy has to clear before it earns
+anything, and it is most of the reason intraday is hard: at 10 bps of slippage a side the
+breakeven move is 0.33%, which is two thirds of the whole v1 target. Because the right
+slippage is a judgement rather than a fact, `backtest` reports a **grid** (0, 2, 5 and 10 bps a
+side) instead of a single assumption, and the headline uses 5 bps.
+
+**Sizing** (`market_intel.sizing`) is the one shared component every module will use. For
+intraday a `SizingPolicy` takes the owner's capital, the risk per trade (1% by default), the
+daily loss limit (2%), the maximum number of trades a day (5) and whether shorting is allowed.
+The quantity is the risk amount divided by the distance to the stop, capped by the exposure
+limit and by the capital itself. Note the interaction: a 0.25% stop would need four times the
+capital as position value to risk a full 1%, so the cap binds and the trade actually risks
+about 0.25% of capital. **Intraday (MIS) leverage is not modelled.** A plan states the entry,
+target, stop, exit time, quantity, worst loss, the probability it was sized from and the
+expected gain after every charge — and a plan whose expected gain is not positive is not a
+trade. Sizing for the other modules (whole shares for a stock, fund splits with minimums, IPO
+lots) is stubbed with tests and grows when those modules arrive.
+
+**The backtest** (`intraday_backtest`) is event-driven, but the bar-by-bar walk already
+happened in the label builder: a label row records what a trade entered at open(t+1) would have
+done, with the stop counting first when one bar touched both barriers and everything flat by
+15:20. The backtest adds what a label cannot know, in time order through each day: sequencing
+(a position occupies the account until its own exit bar, so a signal that fires while a trade
+is open is skipped, not quietly taken in parallel), sizing, every charge, the daily loss limit
+and trade cap, compounding (each day is sized from the equity actually reached), and a stop
+once equity falls below a quarter of where it started, because a real account would have been
+shut long before. `no_trading` is always in the comparison and is allowed to win.
+
+**The meta-model** (`intraday_models`) is LightGBM over the intraday features plus the rule
+signals, one model per side, predicting P(the target is hit first). It judges the signals the
+rules produce rather than inventing new ones. Each month is predicted by a model trained only
+on earlier months in a rolling window; an intraday label never leaves its own day, so training
+on strictly earlier days purges the label windows, and a one-day embargo covers the overnight
+edge. The last months are a holdout that is scored exactly once. Training rows are capped so
+the rolling fits stay quick, sampled at random with a fixed seed and never by recency or
+outcome. A fold too small for LightGBM to split produces one constant prediction and an AUC of
+0.5 for a reason that has nothing to do with the market, so such folds are logged and counted
+in the report rather than passing silently. Models are registered as `candidate`
+(`model_versions.kind = 'intraday'`, whose `horizon` counts one-minute bars); nothing is ever
+promoted.
+
+**Storage.** `backtest_runs` holds one row per backtest (what, on which labels, with which
+capital and slippage, and the result after every charge) and `backtest_trades` every simulated
+trade, so a result can be checked trade by trade (migration 0010). Nothing in these tables is
+a real order: the project never places any.
 
 ## Models, evaluation, costs and the registry
 
