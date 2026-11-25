@@ -323,7 +323,7 @@ def run_replay(
     )
     policy = _policy(capital)
     out = [
-        f"replay {day} — {strategy} ({rule.description}), labels {label_version}"
+        f"replay {day} - {strategy} ({rule.description}), labels {label_version}"
         f" {variant if label_version == 'v2' else ''}".rstrip(),
         f"capital Rs {capital:,.0f}; risk {policy.risk_per_trade:.0%} per trade;"
         f" daily loss limit {policy.daily_loss_limit:.0%}; at most"
@@ -356,14 +356,20 @@ def run_replay(
             trade.entry,
             target_pct=abs(100 * (trade.target - trade.entry) / trade.entry),
             stop_pct=abs(100 * (trade.entry - trade.stop) / trade.entry),
-            odds=OutcomeOdds(target=trade.probability or 0.5),
+            odds=OutcomeOdds(target=trade.probability if trade.probability else 0.5),
             policy=policy,
             day=state,
             slippage_bps=slippage_bps,
             require_positive_ev=False,
         )
         out.append(f"{clock}  decided:")
-        out += [f"    {line}" for line in plan.lines()]
+        lines = plan.lines()
+        if trade.probability is None:  # a rule has no probability of its own
+            lines = [
+                line.replace("P(target) 50%", "P(target) 50% (assumed: this rule has no model)")
+                for line in lines
+            ]
+        out += [f"    {line}" for line in lines]
         out.append(
             f"    -> {trade.exit_reason} after {trade.bars_held} bar(s) at"
             f" {trade.exit_price:.2f}: gross Rs {trade.gross_profit:,.0f},"
