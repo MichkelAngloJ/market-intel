@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
+Last updated: 2026-11-25, HEAD 55bedc8. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -20,8 +20,10 @@ Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S4i (intraday data, features, triple-barrier labels, leakage test) in progress. 0.11 (remove the testing-laptop dependency) stays planned
-  for not before 2026-12-03.
+- Now: S4i (intraday data, features, triple-barrier labels, leakage test) done, awaiting
+  planner review. Next: S5i (intraday strategies + ML meta-model + backtest + capital-based
+  sizing + replay demo). 0.11 (remove the testing-laptop dependency) stays planned for not
+  before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
   News RSS for the watchlist, polite rate); 1.3 Upstox login and token; 1.4 daily candles
@@ -165,8 +167,8 @@ Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
 | 1.2b | done 2026-11-22 (HEAD 7d7e9ac) | passed (planner, 2026-11-22) | Per-company news from Google News RSS (watchlist + recent filers; polite rate; block pause until the next IST day; match confidence); BSE scrip codes on instruments (migration 0005) and BSE matching by code; exchange items keyed by their own identity (migrated once); source-health rule f |
 | S1 | done 2026-11-24 (HEAD 3e1262f) | passed (planner, 2026-11-24) | Upstox browser login (token in Windows Credential Manager), status and health check; V3 daily candles with an honest-session yfinance backup; loader with precedence, gaps, resume and split/bonus flags; migration 0006 (universe members, price events); nifty500 universe; exchange rematch |
 | S2 | done 2026-11-24 (HEAD e91fb33) | passed (planner, 2026-11-24) | Timing convention; features v1 (32, news not for training) and separate forward labels (21/63/126 days, exclusion reasons) with migration 0007; leakage test (truncation, late news, label names, shifted data) in CI and on real data; special sessions out of the gap and label calendar; BHARATBOND out of indices; yfinance curl-cffi off |
-| S3 | done 2026-11-25 (HEAD c472d0a) | passed as engineering (planner, 2026-11-25) |
-| S4i | in progress | – | Intraday data: 1-minute candles, intraday features, triple-barrier labels, leakage test | Baselines + per-sector LightGBM, walk-forward after costs, SHAP, MLflow |
+| S3 | done 2026-11-25 (HEAD c472d0a) | passed as engineering (planner, 2026-11-25) | Baselines + per-sector LightGBM (pooled fallback), walk-forward after costs, SHAP, MLflow, model registry (migration 0008); the models do NOT beat the baselines |
+| S4i | done 2026-11-25 (HEAD 55bedc8) | awaiting planner review | 1-minute candles for the nifty50 universe, the Nifty 50, India VIX and 12 sector indices from 2022 (resumable, one month per request, thin days); the intraday timing convention; features v1 (41) and long/short triple-barrier labels as monthly Parquet with build records (migration 0009); the intraday leakage test (5 checks, 4 leaky fakes) in CI and on real data |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -187,6 +189,19 @@ Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S4i (2026-11-25): local databases at 0009. Nifty 50 import: 50 matched, 0 unmatched.
+  1-minute candles 2022-01-01 to 2026-11-24 for 64 instruments (50 stocks, Nifty 50, India
+  VIX, 12 sector indices): 28,349,007 rows, 3,472 requests, 63 min, 11,656 bars dropped
+  outside 09:15-15:29, 5 invalid OHLC, 253 thin days; an incremental rerun wrote 0 rows.
+  Features v1: 4,015,772 rows in 59 monthly Parquet files, 640 MB, 15 min (% NULL by group:
+  returns 0.8, vwap 0.0, opening range 2.3, volume 0.8, volatility 1.5, relative strength
+  6.3, market 0.0, previous day 0.0, time and flags 0.0, rule signals 0.0). Labels:
+  8,031,544 rows, 63.1 MB, 11 min; long target-first 5.5% / stop-first 24.7% / time-limit
+  69.8%, average gross return -0.003%; short 5.3% / 23.5% / 71.2%, +0.002%; excluded
+  thin_day 2,850, price_event 402, no_entry 55 (per side). check-leakage --sample 500 on
+  real data: PASS (242 s). Health overall OK; backup with restore test OK (1 min 48 s, 686.9 MB; restore test 2 min 30 s).
+  Three sectors (Telecommunication, Capital Goods, Consumer Services) have no NSE sector
+  index, so relative strength vs the sector is NULL for their stocks.
 - S3 (2026-11-25): local databases at 0008. Real training (7.5 min): 17 sector models +
   1 pooled (Diversified, Media, Textiles); 11 thin stocks excluded; folds 2018-2026, holdout
   from 2026-04-24. Walk-forward AUC 0.526 (baselines 0.500-0.501). Walk-forward portfolio
@@ -266,6 +281,19 @@ Last updated: 2026-11-25, HEAD c472d0a. Updated at the end of every task (see
   day 23 Nov); the next incremental run picks it up.
 - S4: the models don't beat the baselines after costs; nothing may become `active`. Paper
   trading may run on the candidates to collect outcomes, clearly labelled as such.
+- S5i: with a 0.5% target and a 0.25% stop over 15 bars, about 70% of intraday decision
+  points reach neither barrier and the target is hit only ~5% of the time; both sides average
+  about zero gross return. Volatility-scaled barriers (and a shorter time limit) are worth
+  testing before any strategy is built on these labels.
+- Intraday price events: a split/bonus day is detected from that day's close, so it cannot be
+  a feature at a decision point during the day. The event day and the next trading day are
+  excluded from the labels instead, and only the previous day's event is a feature.
+- Windows file locks: replacing the intraday progress file failed once with 'Access is
+  denied' (a scanner or the indexer holding it) and stopped a backfill after 309 requests; it
+  now retries. The other state files (alerts, daily candles, news, source health, the Upstox
+  token) replace the same way and have not been changed.
+- 1-minute candles make the Postgres backup much bigger and slower; `backup --verify` now
+  takes 1 min 48 s, 686.9 MB; restore test 2 min 30 s.
 - Price events: the split/bonus detector records only falling ratios and some events are
   not real splits (e.g. several 0.5 'events' within weeks); consolidations go undetected.
   An adjusted-price series (or a corporate-actions source) would make labels and returns
