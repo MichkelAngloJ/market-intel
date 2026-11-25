@@ -19,6 +19,11 @@ on:
       - "src/market_intel/candles.py"
       - "src/market_intel/intraday_candles.py"
       - "src/market_intel/intraday.py"
+      - "src/market_intel/intraday_strategies.py"
+      - "src/market_intel/intraday_backtest.py"
+      - "src/market_intel/intraday_models.py"
+      - "src/market_intel/intraday_run.py"
+      - "src/market_intel/sizing.py"
       - "src/market_intel/upstox.py"
       - "src/market_intel/features.py"
       - "src/market_intel/feature_spec.py"
@@ -54,6 +59,11 @@ on:
       - "src/market_intel/candles.py"
       - "src/market_intel/intraday_candles.py"
       - "src/market_intel/intraday.py"
+      - "src/market_intel/intraday_strategies.py"
+      - "src/market_intel/intraday_backtest.py"
+      - "src/market_intel/intraday_models.py"
+      - "src/market_intel/intraday_run.py"
+      - "src/market_intel/sizing.py"
       - "src/market_intel/upstox.py"
       - "src/market_intel/features.py"
       - "src/market_intel/feature_spec.py"
@@ -194,6 +204,22 @@ jobs:
           uv run python -m market_intel.intraday features build
           uv run python -m market_intel.intraday labels build
           uv run python -m market_intel.intraday check-leakage --sample 40
+
+      # S5i: volatility-scaled labels, the rule baselines against "no trading" after costs, a
+      # tiny meta-model (the fake month is far too small for the real settings) and a replay.
+      # CI never calls Upstox and never places an order.
+      - name: Intraday strategies, backtest, meta-model and replay on fake data
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          uv run python -m market_intel.intraday labels build --version v2
+          uv run python -m market_intel.intraday backtest --labels v2 --variant k15_b10             --capital 100000 | tee backtest.txt
+          grep -q "no_trading" backtest.txt
+          uv run python -m market_intel.intraday train --labels v2 --variant k15_b10             --window-months 1 --holdout-months 1 --min-train-rows 200             --max-train-rows 20000 --no-mlflow
+          uv run python -m market_intel.intraday report | tee report.txt
+          grep -q "orb_15" report.txt
+          uv run python -m market_intel.intraday replay --capital 100000 | tee replay.txt
+          grep -qE "day total|no signals" replay.txt
 
       # S3: walk-forward training, baselines after costs, SHAP, MLflow and the registry on the
       # same synthetic data (both fake sectors are small, so only the pooled model trains).

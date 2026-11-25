@@ -253,11 +253,21 @@ def run_report(conn: Any, *, limit: int = 40) -> list[str]:
     return out
 
 
+def last_built_day(settings: Settings, label_version: str) -> date:
+    """The most recent day with both features and labels built (the default for a replay)."""
+    features = I.load_built(settings, "intraday_features", I.VERSION, columns=["trade_date"])
+    labels = I.load_built(settings, "intraday_labels", label_version, columns=["trade_date"])
+    both = set(features["trade_date"]) & set(labels["trade_date"])
+    if not both:
+        raise ConfigError("no day has both features and labels built")
+    return max(both)
+
+
 def run_replay(
     settings: Settings,
     conn: Any,
     *,
-    day: date,
+    day: date | None = None,
     capital: float = DEFAULT_CAPITAL,
     label_version: str = "v2",
     variant: str = "k15_b10",
@@ -268,6 +278,8 @@ def run_replay(
     """Step through one past day and print each trade plan and what happened to it."""
     if strategy not in S.STRATEGY_BY_NAME:
         raise ConfigError(f"unknown strategy {strategy!r}")
+    if day is None:
+        day = last_built_day(settings, label_version)
     features, labels = _load(settings, label_version, day, day)
     if features.empty:
         raise ConfigError(f"no built features for {day}")

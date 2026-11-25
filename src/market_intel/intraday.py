@@ -1287,6 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--window-months", type=int, default=12)
     train.add_argument("--holdout-months", type=int, default=3)
     train.add_argument("--max-train-rows", type=int, default=500_000)
+    train.add_argument("--min-train-rows", type=int, default=20_000)
     train.add_argument("--no-mlflow", action="store_true")
     train.add_argument("--no-save", action="store_true")
 
@@ -1294,7 +1295,12 @@ def main(argv: list[str] | None = None) -> int:
     shown.add_argument("--limit", type=int, default=40)
 
     replay = sub.add_parser("replay", help="step through one past day and show the trade plans")
-    replay.add_argument("--date", dest="day", type=date.fromisoformat, required=True)
+    replay.add_argument(
+        "--date",
+        dest="day",
+        type=date.fromisoformat,
+        help="a past trading day; the last built day by default",
+    )
     replay.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
     replay.add_argument("--strategy", default="orb_15")
     replay.add_argument(
@@ -1364,6 +1370,7 @@ def main(argv: list[str] | None = None) -> int:
                         window_months=args.window_months,
                         holdout_months=args.holdout_months,
                         max_train_rows=args.max_train_rows,
+                        min_train_rows=args.min_train_rows,
                     )
                     with ingestion_run(
                         settings,
