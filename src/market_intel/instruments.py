@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import re
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -609,7 +610,8 @@ def read_sector_csv(path: Path) -> list[SectorRow]:
 @dataclass
 class SectorPlan:
     updates: list[tuple[str, int]] = field(default_factory=list)  # sector, instrument id
-    matched_ids: list[int] = field(default_factory=list)  # the Nifty 500 universe
+    matched_ids: list[int] = field(default_factory=list)  # the universe's members
+    universe: str = "nifty500"
     matched: int = 0
     unchanged: int = 0
     unmatched: int = 0
@@ -621,7 +623,7 @@ class SectorPlan:
             f"{prefix}sector import: matched {self.matched}, unmatched {self.unmatched}",
             f"  sectors set or changed {len(self.updates)}, unchanged {self.unchanged},"
             f" empty industry skipped {self.empty}",
-            f"  universe nifty500: {len(self.matched_ids)} members",
+            f"  universe {self.universe}: {len(self.matched_ids)} members",
         ]
 
 
@@ -666,24 +668,34 @@ SECTOR_LOAD_SQL = (
 
 
 def run_import_sectors(
-    settings: Settings, path: Path, *, dry_run: bool = False, connect: Connect | None = None
+    settings: Settings,
+    path: Path,
+    *,
+    dry_run: bool = False,
+    connect: Connect | None = None,
+    universe: str = "nifty500",
 ) -> SectorPlan:
+    """Sectors from an NSE index list CSV (Nifty 500, Nifty 50, ...); the matched stocks become
+    ``universe``'s members as of today (IST)."""
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", universe):
+        raise SectorFileError("universe names are lower-case letters, digits and _")
     rows = read_sector_csv(path)
     with (connect or postgres.connect)(settings.require("database")) as conn:
         try:
             with conn.transaction():
                 plan = plan_sectors(rows, conn.execute(SECTOR_LOAD_SQL).fetchall())
+                plan.universe = universe
                 if plan.updates:
                     with conn.cursor() as cur:
                         cur.executemany(
                             "UPDATE instruments SET sector = %s WHERE id = %s", plan.updates
                         )
-                # The matched stocks are the "nifty500" universe as of today (IST); one
-                # statement each, so the list is replaced as a whole.
-                conn.execute("DELETE FROM universe_members WHERE universe = 'nifty500'")
+                # The matched stocks are the universe as of today (IST); one statement each,
+                # so the list is replaced as a whole. (The name was checked above.)
+                conn.execute(f"DELETE FROM universe_members WHERE universe = '{universe}'")
                 conn.execute(
                     "INSERT INTO universe_members (universe, instrument_id, as_of)"
-                    " SELECT 'nifty500', unnest(%s::bigint[]), %s",
+                    f" SELECT '{universe}', unnest(%s::bigint[]), %s",
                     (plan.matched_ids, ist_today()),
                 )
                 if dry_run:
@@ -718,6 +730,9 @@ def build_parser() -> argparse.ArgumentParser:
     sectors = sub.add_parser("import-sectors", help="set sectors from the Nifty 500 list CSV")
     sectors.add_argument("path", type=Path, help="the CSV downloaded from the NSE Indices website")
     sectors.add_argument("--dry-run", action="store_true", help="show the changes, save nothing")
+    sectors.add_argument(
+        "--universe", default="nifty500", help="the universe the matched stocks form"
+    )
     return parser
 
 
@@ -753,7 +768,11 @@ def main(argv: list[str] | None = None, *, connect: Connect | None = None) -> in
                     print(f"No such file: {args.path}", file=sys.stderr)
                     return 2
                 plan = run_import_sectors(
-                    settings, args.path, dry_run=args.dry_run, connect=connect
+                    settings,
+                    args.path,
+                    dry_run=args.dry_run,
+                    connect=connect,
+                    universe=args.universe,
                 )
                 print("\n".join(plan.lines(args.dry_run)))
         except RefreshRefused as exc:
