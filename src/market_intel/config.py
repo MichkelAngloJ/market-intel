@@ -216,6 +216,10 @@ class Settings(BaseSettings):
     google_news_min_seconds: float = Field(default=10, ge=1)  # one request per this, process-wide
     google_news_company_interval_minutes: int = Field(default=60, ge=1)
     google_news_filers_cap: int = Field(default=30, ge=0)
+    # intraday triple-barrier labels (S4i): target and stop in percent, time limit in bars
+    intraday_target_pct: float = Field(default=0.5, gt=0, le=20)
+    intraday_stop_pct: float = Field(default=0.25, gt=0, le=20)
+    intraday_max_bars: int = Field(default=15, ge=1, le=375)
     # llm
     gemini_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
