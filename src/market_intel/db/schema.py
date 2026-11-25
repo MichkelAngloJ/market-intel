@@ -372,3 +372,73 @@ feature_builds = Table(
     CheckConstraint("rows >= 0 AND files >= 0", name="counts_non_negative"),
     CheckConstraint("to_date >= from_date", name="date_order"),
 )
+
+
+# --- intraday backtests (0010, S5i) -------------------------------------------------------
+BACKTEST_KINDS = ("strategy", "model", "baseline")
+EXIT_REASONS = ("target", "stop", "time_limit", "session_end")
+
+# One row per backtest: which strategy or model, on which labels, with which capital and
+# costs, and what it did after every charge. Nothing here is a real order.
+backtest_runs = Table(
+    "backtest_runs",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("kind", Text, nullable=False),  # strategy, model or baseline
+    Column("name", Text, nullable=False),  # e.g. orb_15, lgbm_intraday_long
+    Column("label_version", Text, nullable=False),  # v1 or v2
+    Column("variant", Text),  # the v2 barrier variant, NULL for v1
+    Column("period", Text, nullable=False),  # walk_forward or holdout
+    Column("from_date", Date, nullable=False),
+    Column("to_date", Date, nullable=False),
+    Column("capital", Numeric(16, 2), nullable=False),
+    Column("slippage_bps", Float, nullable=False),
+    Column("trades", Integer, nullable=False),
+    Column("hit_rate", Float),  # NULL when there were no trades
+    Column("net_profit", Numeric(16, 2), nullable=False),  # rupees after ALL costs
+    Column("costs_paid", Numeric(16, 2), nullable=False),
+    Column("return_pct", Float, nullable=False),  # net profit over capital
+    Column("max_drawdown_pct", Float, nullable=False),
+    Column("sharpe", Float),
+    Column("days", Integer, nullable=False),
+    Column("days_without_trade", Integer, nullable=False),
+    Column("params", JSONB, nullable=False),
+    Column("created_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    CheckConstraint(_in("kind", BACKTEST_KINDS), name="kind"),
+    CheckConstraint("trades >= 0 AND days >= 0 AND days_without_trade >= 0", name="counts"),
+    CheckConstraint("to_date >= from_date", name="date_order"),
+    CheckConstraint("capital > 0", name="capital_positive"),
+    Index(None, "kind", "name", "period"),
+)
+
+# Every simulated trade of a run, so a result can be checked trade by trade.
+backtest_trades = Table(
+    "backtest_trades",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column(
+        "run_id",
+        BigInteger,
+        ForeignKey("backtest_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("instrument_id", BigInteger, ForeignKey("instruments.id"), nullable=False),
+    Column("trade_date", Date, nullable=False),
+    Column("decided_at", TIMESTAMPTZ, nullable=False),  # the decision bar t
+    Column("side", Text, nullable=False),
+    Column("entry", PRICE, nullable=False),
+    Column("exit_price", PRICE, nullable=False),
+    Column("target", PRICE, nullable=False),
+    Column("stop", PRICE, nullable=False),
+    Column("quantity", Integer, nullable=False),
+    Column("bars_held", Integer, nullable=False),
+    Column("exit_reason", Text, nullable=False),
+    Column("gross_profit", Numeric(16, 2), nullable=False),
+    Column("costs", Numeric(16, 2), nullable=False),
+    Column("net_profit", Numeric(16, 2), nullable=False),
+    Column("probability", Float),  # what the model expected, NULL for a rule
+    CheckConstraint(_in("side", ("long", "short")), name="side"),
+    CheckConstraint(_in("exit_reason", EXIT_REASONS), name="exit_reason"),
+    CheckConstraint("quantity > 0", name="quantity_positive"),
+    Index(None, "run_id", "trade_date"),
+)

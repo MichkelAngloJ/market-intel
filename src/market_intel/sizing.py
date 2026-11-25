@@ -184,12 +184,18 @@ def plan_intraday_trade(
     slippage_bps: float = 0.0,
     exit_time: time = FLAT_BY,
     blocked: str | None = None,
+    require_positive_ev: bool = True,
 ) -> TradePlan:
     """Size one intraday trade and decide whether it is worth taking.
 
     ``target_pct`` and ``stop_pct`` are distances from the entry, in percent. The expected
     gain is the probability-weighted gross result of the three barrier outcomes minus every
-    charge and the slippage of both sides; the trade is refused unless it is positive.
+    charge and the slippage of both sides.
+
+    With ``require_positive_ev`` (the default) a trade whose expected gain is not positive is
+    refused. A rule baseline passes False: it should trade its own signal, so the backtest
+    measures the rule itself and not a filtered version of it. Either way the expected gain is
+    on the plan.
     """
     if side not in SIDES:
         raise ValueError(f"side must be one of {SIDES}")
@@ -238,7 +244,7 @@ def plan_intraday_trade(
             "value": value,
         },
     )
-    if expected <= 0:
+    if expected <= 0 and require_positive_ev:
         return no_trade(
             symbol,
             side,
