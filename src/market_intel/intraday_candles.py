@@ -279,7 +279,22 @@ class Progress:
         with file_lock(self.path.with_name(self.path.name + ".lock")):
             tmp = self.path.with_name(self.path.name + ".tmp")
             tmp.write_text(json.dumps({"done": self.done}), encoding="utf-8")
-            os.replace(tmp, self.path)
+            replace_file(tmp, self.path)
+
+
+def replace_file(
+    src: Path, dst: Path, attempts: int = 10, sleep: Callable[[float], None] = time_mod.sleep
+) -> None:
+    """os.replace with a short retry: on Windows a virus scanner or the search indexer can hold
+    the target for a moment ("Access is denied"), which must not stop an hour-long backfill."""
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            sleep(0.05 * (i + 1))
 
 
 # --- the command -------------------------------------------------------------------------

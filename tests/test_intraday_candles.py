@@ -185,3 +185,25 @@ def test_failed_months_are_listed_and_the_run_continues(tmp_path, fake_loader):
 def test_unknown_symbol_is_a_config_error(tmp_path, fake_loader):
     with pytest.raises(ConfigError):
         ic.run_intraday(Settings(tmp_path), None, symbol="NOPE", dry_run=True, client=FakeUpstox())
+
+
+def test_progress_file_replace_retries_a_briefly_locked_file(tmp_path, monkeypatch):
+    calls = []
+    real = ic.os.replace
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError("Access is denied")
+        real(src, dst)
+
+    monkeypatch.setattr(ic.os, "replace", flaky)
+    src, dst = tmp_path / "a.tmp", tmp_path / "a.json"
+    src.write_text("{}", encoding="utf-8")
+    ic.replace_file(src, dst, sleep=lambda s: None)
+    assert dst.read_text(encoding="utf-8") == "{}" and len(calls) == 3
+    src.write_text("{}", encoding="utf-8")
+    calls.clear()
+    monkeypatch.setattr(ic.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError()))
+    with pytest.raises(PermissionError):
+        ic.replace_file(src, dst, attempts=2, sleep=lambda s: None)
