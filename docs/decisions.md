@@ -374,3 +374,22 @@
   volatile universe (the next task). No live orders.
 - Reason (owner): Test whether holding longer helps and whether a few very-confident signals are
   strong, and show "trade vs no-trade" as clear percentages.
+
+## 2026-11-26 - Wider volatile intraday universe and a calibrated model
+- Decision: Build a new intraday universe 'movers100' of about 100 NSE stocks chosen from the
+  nifty500 by liquidity (median daily turnover, above a floor so ~5 bps slippage is realistic)
+  and intraday volatility (median daily range), always including the owner's named picks
+  (Hindustan Copper, Mazagon Dock, Aegis Logistics, Petronet LNG, HAL, Federal Bank, IDFC First
+  Bank). Download their 1-minute candles from Jan 2022, build features (v1) and labels (v1, v2,
+  v3), train the meta-model with its probabilities calibrated (isotonic on the walk-forward
+  out-of-fold predictions) before the EV gate, and backtest every rule strategy and the model
+  after costs, reporting each against no_trading in percentages plus the best per-trade gross
+  edge at zero slippage against the ~8.3 bps cost floor. Jio Platforms (JPL, listed 28 Oct 2026)
+  and Gold BeES are excluded. No live orders; nothing promoted.
+- Concern (planner): More volatile stocks move more but also have wider spreads (more slippage),
+  so the net after costs is uncertain. Picking the most volatile names in-sample can flatter the
+  result; the monthly walk-forward and the untouched holdout guard against it, and no_trading
+  stays the benchmark. On Nifty 50 the gross edge was ~1/15 of the fee; if it stays that small
+  on volatile stocks, nothing will work here and intraday cash equity is finished.
+- Reason (owner): Individual volatile stocks move far more than the Nifty 50/100 index, so they
+  have a better chance of beating intraday costs; the system must still be free to say "no trade".

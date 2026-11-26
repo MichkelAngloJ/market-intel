@@ -44,6 +44,7 @@ rule signals). Everything else is still to come.
 | Order book | buy/sell imbalance, large orders | minutes | Upstox live feed (recorded from 1.7; no history exists) | 1.7 |
 | Rule patterns | opening-range breakout, VWAP trend and reversion, gaps, volume bursts, relative strength | minutes | our own 1-minute candles (built in S5i as the model's baselines) | S5i |
 | Trading costs | brokerage, STT, exchange, SEBI, stamp duty, GST, slippage | all (decides whether a signal is worth taking) | the brokers' published charges (intraday: built in S5i; delivery: S3) | S3, S5i |
+| Volatility of the stock itself | how far a name moves in minutes, against a fixed fee | intraday | our own 1-minute candles; the `movers100` screen uses the median daily range (S5i-c) | S5i-c |
 | Results | surprise, margins, guidance | days around results; months | NSE/BSE results feeds + filing PDFs | 1.2, Phase 2 |
 | Corporate events | order wins, dividends, splits, buybacks, M&A, management change | days | NSE/BSE announcement feeds | 1.2 |
 | Promoter and insider activity | promoter buying/selling, pledges | weeks–months | NSE insider-trading feed; shareholding filings | 1.2, Phase 2 |

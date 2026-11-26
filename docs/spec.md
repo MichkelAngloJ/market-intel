@@ -161,6 +161,12 @@ Decision 2026-11-22:
   expected gain after costs is positive.
 - Fixed risk per trade, a daily loss limit and a maximum number of trades.
 - 15 minutes is the main horizon; 5 minutes is an experiment.
+- Measured result (S5i-c, 2022-2026, 107 liquid but volatile NSE stocks): the rule
+  strategies still have no gross edge (about -0.06 bps a trade before slippage against
+  an 8.3 bps charge floor). The meta-model, whose expected-value gate selects moments
+  where the ATR-scaled target is wide relative to the fee, did pay over the
+  walk-forward (+9.18 bps a trade) but its edge decays to negative by 2026 and the
+  untouched holdout loses. Regime-dependent, not a current edge; nothing promoted.
 - Measured result (S5i and S5i-b, 2022-2026 Nifty 50 minute data): no rule strategy and no
   meta-model beats "no trading" after costs, at any slippage down to zero, at any hold
   from 5 bars to the session close, and in no confidence band including the model's most

@@ -510,6 +510,9 @@ How it works: [architecture](architecture.md#intraday-strategies-backtest-and-si
 | Longer-hold labels (30 / 60 bars, hold to close) | `uv run python -m market_intel.intraday labels build --version v3` |
 | The leakage test on the longer-hold labels | `uv run python -m market_intel.intraday check-leakage --labels v3 --sample 500` |
 | Is the model's confidence meaningful, and do the strongest signals pay? | `uv run python -m market_intel.intraday precision --capital 100000` |
+| Choose a liquid, volatile intraday universe from the daily candles | `uv run python -m market_intel.intraday select-universe --name movers100 --size 100` (add `--dry-run` first) |
+| Then download its 1-minute candles | `uv run python -m market_intel.candles intraday --universe movers100 --from 2022-01-01` |
+| Build and train for that universe | add `--universe movers100` to `features build`, `labels build`, `backtest`, `train`, `precision` |
 
 **Order:** candles, `features build`, `labels build`, `labels build --version v2`, then
 `backtest` and `train`. `replay` needs the features and labels of the day; with no `--date` it
@@ -520,6 +523,16 @@ a "vs none" column: the gap to doing nothing, which returns 0%. A negative numbe
 money that no trading would have kept. The replay prints the day's charges and the gross
 price move as percentages too, so "the fee was bigger than the move" is visible without
 arithmetic.
+
+**A second universe.** Each universe keeps its own Parquet months under
+`data/features/intraday/<universe>/` and its own resume point, so building one never
+touches another. A full 100-stock universe is about 2 hours to download (Upstox allows
+1,600 requests per 30 minutes, so most of that is waiting), 30 minutes of features and
+90 minutes of labels, and it roughly doubles the database and the backup: the Postgres
+dump went from 687 MB to 1.2 GB and the restore test takes about 8 minutes.
+
+**`precision` reads the cached probabilities** that `train` wrote, so it costs seconds.
+Pass `--retrain` to train the walk-forward again instead.
 
 **Reading `precision`.** The calibration table shows what the model said against what
 happened: if decile 10 says 43% and delivers 34%, the model ranks correctly but its

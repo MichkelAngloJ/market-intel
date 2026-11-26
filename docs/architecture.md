@@ -1043,6 +1043,56 @@ the trades captured, the charges as a share of both capital and traded value, an
 in rupees and percent — and says so outright when the charges exceeded the whole move. The point
 is that "the fee is bigger than the move" should be readable without arithmetic.
 
+**A wider, more volatile universe: `movers100`** (S5i-c). On the Nifty 50 the per-trade gross
+edge was about a basis point against a round trip of roughly 8.3 bps in charges, so the binding
+constraint is the SIZE of the move rather than the holding time. `intraday select-universe`
+tests that directly: from the daily candles already stored it computes each nifty500 member's
+median daily turnover (liquidity) and median daily range (volatility), keeps those above a
+turnover floor so a few basis points of slippage stays a realistic assumption, requires daily
+history from before the 1-minute data starts, and takes the most volatile of the survivors. The
+owner's named picks are always added. It writes `universe_members` and downloads nothing; the
+existing `candles intraday --universe <name>` does that. `movers100` is 107 stocks with a median
+daily range of 3.14% against the nifty500's 2.81%.
+
+Two things had to change to hold a second universe. The built Parquet path now carries the
+universe (`features/intraday/<universe>/<version>/`), because it previously did not and a second
+build would have overwritten the first. And an incremental build now reads its resume point from
+**its own files** rather than from `feature_builds`, which has no universe column and so reported
+another universe's progress as this one's.
+
+**Calibrated probabilities.** S5i-b showed the raw LightGBM probabilities rank well but are badly
+overconfident at the top, and the expected-value gate multiplies that probability by the target
+distance, so an overconfident number makes a losing trade look worth taking. Isotonic regression
+repairs the level without touching the order — the weakest assumption that can fix calibration,
+so it cannot invent an edge the ranking does not already contain. It is fitted on walk-forward
+out-of-fold predictions and applied before the gate.
+
+**Each month is calibrated from earlier months only.** Fitting one mapping over the whole
+walk-forward and applying it back to those same rows uses a month's own outcomes — and every
+later month's — to calibrate it. The sign is unmistakable: the walk-forward calibration error
+collapses to 0.000 while the genuinely out-of-sample holdout reaches only 0.007. The expanding
+scheme fits each month from strictly earlier months; the first months have no history and keep
+their raw probability, flagged so a caller can drop them. The holdout is different: every
+walk-forward month precedes it, so fitting on all of them is legitimate.
+
+**The probability cache.** `train` writes its walk-forward and holdout probabilities to Parquet
+under `DATA_DIR/predictions/intraday/<universe>/<version>_<variant>/`, so `precision` reads them
+in seconds instead of retraining for twenty minutes. `--retrain` forces a fresh run.
+
+**What movers100 showed.** The rule strategies have no gross edge at all: the best is about
+-0.06 bps a trade before slippage, against the 8.3 bps charge floor, so every one of them ruined
+the account and `no_trading` won again. The meta-model is different and worth recording
+precisely. Ranked by probability alone no confidence band pays (the most confident 1% earns
++2.30 bps gross for longs and +4.33 for shorts, against an 18.26 bps round trip). But the
+expected-value gate does not rank by probability alone: it multiplies the probability by the
+barrier distance, so it selects moments where the ATR-scaled target is wide enough that the fee
+is a small share of the move. Those trades average a 110 bps target against the rules' 49 bps,
+and they paid — +9.18 bps a trade over the walk-forward. The catch is that the edge is
+regime-dependent: +5.15 bps in 2022, +10.25 in 2023, +13.27 in 2024 (82% of all the profit),
++4.75 in 2025 and **-9.29 in 2026**, with the untouched holdout negative on three trades. The
+mechanism is real and the leakage test passes on this universe, but it is not a current edge and
+nothing is promoted.
+
 ## Models, evaluation, costs and the registry
 
 Sprint task S3 (decisions 2026-11-24). Command: `market_intel.models` (`train`, `report`, `ui`);
