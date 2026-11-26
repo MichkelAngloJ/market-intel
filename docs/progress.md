@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-26, HEAD 6874630. Updated at the end of every task (see
+Last updated: 2026-11-27, HEAD d35852c. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -20,10 +20,10 @@ Last updated: 2026-11-26, HEAD 6874630. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S5i-c (wider volatile universe `movers100`, calibrated model) done, awaiting planner
-  review. The S series is complete. Next: S6 (mutual funds: AMFI NAV, ranking, "how sure"
-  history stats, split calculator with minimums, keep/exit flags). 0.11 (remove the
-  testing-laptop dependency) stays planned for not before 2026-12-03.
+- Now: S6a (mutual funds: AMFI NAV data and the "how sure" stats engine) done, awaiting
+  planner review. Next: S6b (the lumpsum pick, the SIP plan with each scheme's own minimums,
+  and keep-or-exit flags), built on S6a. 0.11 (remove the testing-laptop dependency) stays
+  planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
   News RSS for the watchlist, polite rate); 1.3 Upstox login and token; 1.4 daily candles
@@ -185,6 +185,7 @@ Last updated: 2026-11-26, HEAD 6874630. Updated at the end of every task (see
 | S5i | done 2026-11-25 (HEAD ad735f5) | passed (planner, 2026-11-25) | Labels v2 (ATR-scaled barriers, 3x3 grid) with its own leakage check; 8 rule strategies with mood and no-trade filters; intraday charges (official rates) and the shared capital-sizing component; event-driven backtest after costs with migration 0010 (backtest_runs, backtest_trades, model kind 'intraday'); LightGBM meta-model per side (monthly walk-forward, holdout scored once); backtest / train / report / replay commands. NOTHING beats `no_trading` |
 | S5i-b | done 2026-11-26 (HEAD 23dde7a) | passed (planner, 2026-11-26) | Labels v3 (ATR barriers held 30 / 60 bars or to the close) with the ATR invariant checked separately; `intraday precision` (probability deciles and the top 10/5/1% most-confident signals with their net result after costs); plain-percentage reporting against `no_trading`. BOTH questions answered NO: holding longer does not beat the fee, and no confidence band is profitable |
 | S5i-c | done 2026-11-26 (HEAD 6874630) | awaiting planner review | `movers100` (107 liquid, volatile NSE stocks incl. the owner's 7 picks) chosen from the daily candles; 47.8M 1-minute rows; features and labels v2; isotonic calibration fitted from EARLIER months only; a probability cache. Rules still have NO gross edge; the model's EV gate pays over the walk-forward but decays to negative by 2026 |
+| S6a | done 2026-11-27 (HEAD d35852c) | awaiting planner review | Mutual funds, the data and evidence half. Official AMFI NAV (NAVAll.txt and the 90-day history report, both verified live and parsed by their own header because their column orders differ); migration 0011 (mf_schemes, mf_nav, mf_nav_chunks); a resumable, polite backfill; and a per-fund stats engine (rolling returns, CAGR, volatility, drawdown, fall-and-recovery distributions, category percentiles) with a disclaimer and a survivorship note on every output |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -205,6 +206,27 @@ Last updated: 2026-11-26, HEAD 6874630. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S6a (2026-11-27): local databases at 0011 (migration applied after CI and compose-smoke
+  were green at 8aab9e6). AMFI scheme master: 14,245 schemes on 2026-11-26, of which the
+  universe (open-ended equity/hybrid/index on the GROWTH option) is 2,255 - equity 1,133,
+  index 733, hybrid 389, across 52 AMCs. IDCW schemes are excluded because their NAV falls
+  when they pay out. NAV backfill: 72 chunks of 90 days, 3,488,997 rows for all 2,255 funds,
+  2011-01-03 to 2026-11-26 (15.9 years), about 4.0 GB of raw files under DATA_DIR, roughly
+  75 seconds a chunk because AMFI's server takes that long to build one. A full rerun plans
+  0 of 65 chunks and writes 0 rows. History held per fund: 245 funds have 15+ years, 362
+  have 10-15, 331 have 5-10, 476 have 3-5 and 841 under 3 (new schemes).
+  The stats engine on real data, by the real command: 4 named funds in 0.3 s; the whole
+  equity category (1,133 funds) in 34 s through a server-side cursor, one fund at a time.
+  What it shows, as evidence and nothing more: HDFC Flexi Cap over 15.9 years has a worst
+  1-year window of -35.8% and a worst 10-year window of +9.2%; Parag Parikh Flexi Cap fell
+  31.3% in Feb-Mar 2020 and regained that peak in 145 days, while SBI Small Cap's 40.3% fall
+  from Jan 2018 took 1,044 days to regain and Nippon India Small Cap's 48.6% fall took 1,064.
+  The 1-year spread is where the uncertainty lives; the 10-year spread is narrow for every
+  fund looked at. NOTHING here is a prediction or a recommendation, and every output carries
+  the survivorship note and the "not investment advice" disclaimer.
+  Health overall WARN: 12 OK, 1 WARN (the Upstox token expired overnight; no Upstox call is
+  part of this task), 0 FAIL, 1 SKIP; pg_migrations at 0011 (head). Postgres is at 73.6% of
+  its space. Backup 1.2 GB (20 tables, 85,626,863 rows) with restore test OK.
 - S5i-c (2026-11-26): local databases at 0010 (no migration). Universe `movers100`: 107
   stocks (100 by volatility above a Rs 25 crore median-turnover floor, from 317 of 497
   nifty500 members that cleared it, plus the owner's 7 named picks), median daily range
@@ -370,6 +392,22 @@ Last updated: 2026-11-26, HEAD 6874630. Updated at the end of every task (see
   calibrate it; the walk-forward error collapsed to 0.000 while the holdout reached only
   0.007. Each month is now calibrated from strictly earlier months. It changed the headline
   by only 0.05 bps here, but the next model it is used on may not be so forgiving.
+- AMFI serves at most 90 days of NAV history per request and takes 60-110 seconds to build
+  each ~70 MB chunk, so a 15-year backfill is about 65 requests and a little over two hours.
+  It is resumable in two places (the raw file and the `mf_nav_chunks` row), so an interrupted
+  run costs at most one chunk. Downloading in parallel would work and the primary key already
+  makes duplicates impossible, but AMFI publishes no rate limit and has no official
+  alternative, so a block would cost the whole source; sequential is the deliberate choice.
+- AMFI's two files order their columns DIFFERENTLY (the daily file puts the ISINs before the
+  scheme name, the history report puts them after Plan and Option), and AMFI has retired the
+  older format and added the Plan and Option columns. Any parser that counts positions is
+  wrong against one of them; both are read by their own header line.
+- IDCW schemes are excluded from the mutual-fund universe because their NAV drops when they
+  pay out, so a NAV series is not a total return for them. If an IDCW fund is ever wanted, it
+  needs a distribution-adjusted series, not the raw NAV.
+- Survivorship bias is unavoidable with AMFI's files: they list the schemes that exist today,
+  so funds merged away or wound up are missing and every historical statistic is flattered by
+  their absence. Every stats output says so; S6b must not quietly drop the note.
 - `feature_builds` has no universe column, so it cannot say where an incremental build
   should resume; the files on disk decide. If a third universe arrives, giving that table a
   universe column (a migration) would be cleaner than inferring it from paths.
