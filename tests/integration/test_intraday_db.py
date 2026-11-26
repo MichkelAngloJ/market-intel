@@ -92,7 +92,8 @@ def test_features_labels_and_leakage_on_fake_minutes(conn, fake, tmp_path):
     settings = get_settings().model_copy(update={"data_dir": tmp_path})
     feats = it.build(settings, conn, "intraday_features", universe=UNIVERSE, gate_samples=5)
     assert feats.rows == 3 * 45 * 67 - (67 - 37) and feats.files == 3  # June, July, August 2021
-    frame = pd.read_parquet(tmp_path / "features/intraday/v1/year=2021/month=07")
+    # the built path carries the universe since S5i-c, so two universes cannot collide
+    frame = pd.read_parquet(tmp_path / f"features/intraday/{UNIVERSE}/v1/year=2021/month=07")
     assert list(frame.columns[:5]) == ["instrument_id", "version", "ts", "trade_date", "minute"]
     labels = it.build(settings, conn, "intraday_labels", universe=UNIVERSE, gate_samples=0)
     assert labels.excluded.get("thin_day") == 37  # 09:30..14:30 have a bar
