@@ -294,3 +294,21 @@ def M_config():
         label_version="v2", variant="k15_b10", window_months=1, holdout_months=1,
         max_train_rows=20_000, min_train_rows=100,
     )  # fmt: skip
+
+
+def test_an_incremental_build_resumes_from_this_universes_files(built, tmp_path):
+    """feature_builds has no universe column, so the files decide where to resume: another
+    universe's build must never look like this one's progress (S5i-c)."""
+    # the fixture wrote its months under the default universe name
+    months = I.last_built_month(built, "intraday_features", I.VERSION)
+    assert months is not None and months.day == 1
+    # a universe that was never built reports nothing, whatever other universes hold
+    assert I.last_built_month(built, "intraday_features", I.VERSION, "movers100") is None
+
+
+def test_the_built_path_keeps_universes_apart(built):
+    one = I.built_root(built, "intraday_features", I.VERSION, "nifty50")
+    other = I.built_root(built, "intraday_features", I.VERSION, "movers100")
+    assert one != other
+    assert one.name == other.name == I.VERSION
+    assert one.parent.name == "nifty50" and other.parent.name == "movers100"

@@ -1082,10 +1082,33 @@ def load_built(
 
 
 def last_build_to(conn: Any, kind: str, version: str) -> date | None:
+    """The last date any build of this kind and version covered (a record, not a resume point:
+    feature_builds has no universe column, so it cannot say which universe)."""
     row = conn.execute(
         "SELECT max(to_date) FROM feature_builds WHERE kind = %s AND version = %s", (kind, version)
     ).fetchone()
     return row[0] if row else None
+
+
+def last_built_month(
+    settings: Settings, kind: str, version: str, universe: str = "nifty50"
+) -> date | None:
+    """The most recent month already written for THIS universe, read from the files.
+
+    The files are the dataset, so they are what decides where an incremental build resumes.
+    `feature_builds` cannot answer it: one row per build with no universe column, so a build
+    of another universe would otherwise look like this one's progress (S5i-c).
+    """
+    root = built_root(settings, kind, version, universe)
+    if not root.exists():
+        return None
+    months = [
+        date(int(year.name.split("=")[1]), int(month.name.split("=")[1]), 1)
+        for year in root.glob("year=*")
+        for month in year.glob("month=*")
+        if any(month.glob("*.parquet"))
+    ]
+    return max(months) if months else None
 
 
 def data_range(conn: Any, universe: str = "nifty50") -> tuple[date | None, date | None]:
@@ -1127,8 +1150,8 @@ def build(
         raise ConfigError(
             f"no 1-minute candles for universe {universe!r}: run `candles intraday` first"
         )
-    previous = last_build_to(conn, kind, version)
-    begin = start or (date(previous.year, previous.month, 1) if previous else first_data)
+    previous = last_built_month(settings, kind, version, universe)
+    begin = start or previous or first_data
     begin = max(begin, first_data)
     summary = BuildSummary(kind, version)
     hashes: dict[str, str] = {}

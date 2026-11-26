@@ -23,6 +23,7 @@ on:
       - "src/market_intel/intraday_backtest.py"
       - "src/market_intel/intraday_models.py"
       - "src/market_intel/intraday_run.py"
+      - "src/market_intel/universe.py"
       - "src/market_intel/sizing.py"
       - "src/market_intel/upstox.py"
       - "src/market_intel/features.py"
@@ -63,6 +64,7 @@ on:
       - "src/market_intel/intraday_backtest.py"
       - "src/market_intel/intraday_models.py"
       - "src/market_intel/intraday_run.py"
+      - "src/market_intel/universe.py"
       - "src/market_intel/sizing.py"
       - "src/market_intel/upstox.py"
       - "src/market_intel/features.py"
@@ -238,6 +240,23 @@ jobs:
           grep -q "vs none" report_v3.txt
           uv run python -m market_intel.intraday replay --labels v3 --variant k15_bcl             --capital 100000 | tee replay_v3.txt
           grep -qE "charges paid|no signals" replay_v3.txt
+
+      # S5i-c: choosing a second universe from the daily candles, and proving the two
+      # universes keep their own Parquet months and their own resume point.
+      - name: Universe selection and a second universe on fake data
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          uv run python -m market_intel.intraday select-universe --name zzmovers --size 3             --source nifty500 --min-turnover-crore 0 --dry-run | tee select_dry.txt
+          grep -q "DRY RUN" select_dry.txt
+          uv run python -m market_intel.intraday select-universe --name zzmovers --size 3             --source nifty500 --min-turnover-crore 0 | tee select.txt
+          grep -q "rows written to universe_members" select.txt
+          uv run python -m market_intel.intraday features build --universe zzmovers
+          uv run python -m market_intel.intraday labels build --version v2 --universe zzmovers
+          test -d data/features/intraday/zzmovers/v1
+          test -d data/features/intraday/nifty50/v1
+          uv run python -m market_intel.intraday backtest --universe zzmovers --labels v2             --variant k15_b10 --capital 100000 | tee backtest_zz.txt
+          grep -q "no_trading" backtest_zz.txt
 
       # S3: walk-forward training, baselines after costs, SHAP, MLflow and the registry on the
       # same synthetic data (both fake sectors are small, so only the pooled model trains).
