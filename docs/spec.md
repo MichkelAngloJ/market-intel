@@ -186,6 +186,26 @@ Decision 2026-11-22:
   money in FY2023; everything is paper-traded first and promotion needs the owner's
   approval.
 
+## Mutual funds
+
+- Priority 2 (owner, 2026-11-25). Scope: open-ended EQUITY, HYBRID and INDEX funds on the
+  GROWTH option, about 15 years of daily NAV where available.
+- Source: official AMFI. The daily all-scheme file is `NAVAll.txt`; history comes from the NAV
+  history report, which serves at most 90 days per request. No login, no token, no cost.
+  api.mfapi.in and the mftool library are a documented fallback, never the primary, and
+  anything from them is stored under a different `source` value.
+- S6a (done): the data and the evidence. Scheme master with AMFI's categories, resumable NAV
+  download, and a per-fund statistics engine - rolling returns over 1/3/5/7/10 years, CAGR,
+  volatility, worst drawdown, worst 1-year and 3-year windows, and fall-and-recovery
+  distributions after 10/20/30% falls - ranked within a category.
+- S6b (next): the lumpsum pick, the SIP plan with the schemes' own minimums, and keep-or-exit
+  flags, all built on S6a.
+- HONESTY (SEBI): evidence only. No predicted returns, no profit or accuracy claims, no
+  promise that a fall will be recovered. Every statistics output carries "Past performance is
+  not indicative of future results; information, not investment advice" and the survivorship
+  note, because AMFI's files list the funds that exist today and the ones that were merged
+  away or wound up are missing.
+
 ## Modeling rules
 
 - Walk-forward / time-based validation only; no random splits.

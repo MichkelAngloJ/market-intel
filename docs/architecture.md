@@ -1093,6 +1093,85 @@ regime-dependent: +5.15 bps in 2022, +10.25 in 2023, +13.27 in 2024 (82% of all 
 mechanism is real and the leakage test passes on this universe, but it is not a current edge and
 nothing is promoted.
 
+## Mutual funds: AMFI NAV and the "how sure" statistics
+
+Priority 2, and a different kind of problem from intraday: nobody is trying to beat a fee
+here, so the question is not "does this pay?" but "how sure can the owner be?". The module
+therefore produces DISTRIBUTIONS rather than numbers, and never a prediction.
+
+**The source is official AMFI** (verified live 2026-11-26, both linked from AMFI's own
+[NAV download page](https://www.amfiindia.com/net-asset-value/nav-download)):
+
+| What | Where |
+|---|---|
+| Every scheme's latest NAV | `https://portal.amfiindia.com/spages/NAVAll.txt` |
+| Daily NAV for a period | `https://portal.amfiindia.com/DownloadNAVHistoryReport_Po.aspx?frmdt=&todt=` |
+
+No login and no token: AMFI is public. The history report serves at most **90 days per
+request**, so about 15 years is 65 chunks. A chunk covering every scheme is roughly 70 MB and
+the server takes 60-110 seconds to produce one, which makes the download inherently polite -
+under one request a minute even with no added delay. mfapi.in and the mftool library are a
+documented FALLBACK; the module does not use them. If AMFI blocks or breaks, `mf fetch` stops
+and alerts rather than switching source, so no row's provenance is ever in doubt.
+
+**The two files order their columns differently**, which is the trap in this data:
+
+```
+NAVAll.txt      Scheme Code;ISIN Growth;ISIN Reinvestment;Scheme Name;Plan;Option;NAV;Date
+history report  Scheme Code;NAV Name;Plan;Option;ISIN Growth;ISIN Reinvestment;NAV;Date
+```
+
+A parser that counts positions reads Plan and Option as ISINs in one of them. Both are parsed
+by their own header line instead. AMFI also retired its older download format and added the
+Plan and Option columns, so a 6-column parser is wrong against either file today.
+
+**The universe** is open-ended equity, hybrid and index funds on the GROWTH option: 2,255 of
+the 14,245 schemes AMFI published on 2026-11-26 (equity 1,133, index 733, hybrid 389, across
+52 AMCs). IDCW schemes are excluded because their NAV falls when they pay out, so NAV history
+is not a total return. Debt funds, ETFs and fund-of-funds are stored in the scheme master but
+not in the universe - widening it later needs no new download of the master. An AMFI scheme
+code identifies a plan AND an option, so Direct Growth and Regular Growth of one fund are two
+codes and two rows.
+
+Only the universe's NAV is stored. Keeping all 14,245 schemes for 15 years would be roughly
+50 million rows, most of them debt and ETF schemes nothing here looks at.
+
+**Resumable in two places**, because a 15-year backfill will be interrupted: a chunk file
+already on disk under `DATA_DIR/raw/amfi` is not downloaded again, and a chunk already
+recorded `loaded` in `mf_nav_chunks` is not parsed again. A complete rerun writes 0 rows.
+
+### What the stats engine measures
+
+Everything is computed from one fund's NAV series, and every window length is in CALENDAR
+days, because a "3-year return" means three calendar years to an investor; each window's end
+is the last NAV on or before the target date, so a fund that stopped reporting gets no free
+extension.
+
+- **Rolling returns** over 1, 3, 5, 7 and 10-year windows, one window per start date, reported
+  as worst / p10 / median / p90 / best. The spread IS the answer to "how sure": a median
+  tells the owner nothing about the year they might actually buy in.
+- **CAGR since the fund's start**, annualised **volatility** (daily log returns, x sqrt(252)),
+  and the **worst drawdown** with its peak, trough and whether it has been recovered.
+- **Fall-and-recovery**: after a fall of 10%, 20% or 30% from a running peak, how many
+  episodes there were, how many got back to that SAME peak, and the DISTRIBUTION of how long
+  that took. An episode opens when the fall first reaches the level and closes when the NAV
+  regains the peak, so one long slide counts once rather than once a day. Episodes still under
+  water are counted separately and never averaged into the recovery times - that omission is
+  exactly how a recovery statistic flatters itself.
+- **Category percentiles**, computed only against funds in the same category, with ties
+  sharing a percentile so the ranking never depends on input order. A fund whose value is
+  missing is left out rather than ranked last, which would be a judgement the data cannot
+  support.
+
+### What it deliberately does not do
+
+No predicted return, no score, no "good fund" label, no promise that a fall will be recovered.
+Every printed report ends with the survivorship note - AMFI lists the schemes that exist
+today, so funds that were merged away or wound up are missing and these statistics are
+flattered by their absence - and with "Past performance is not indicative of future results;
+information, not investment advice." The lumpsum pick, the SIP plan and keep-or-exit come in
+S6b, on top of this.
+
 ## Models, evaluation, costs and the registry
 
 Sprint task S3 (decisions 2026-11-24). Command: `market_intel.models` (`train`, `report`, `ui`);

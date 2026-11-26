@@ -61,6 +61,10 @@ are appended to [decisions.md](decisions.md); old entries are never edited.
   change a confirmed method.
 - Verify fast-changing facts live (prices, free tiers, versions) and cite sources.
 - Never ask for, paste or print secrets.
+- Order a task's steps so the ones needing the INTERNET or the owner come FIRST and the
+  offline compute follows (owner, 2026-11-26). A connection can go at any moment and a
+  token expires overnight, while a computation can be run at 3 a.m.; a task ordered the
+  other way can lose a whole session to a dropped line.
 - Every task prompt has a DOCS step and updates [progress.md](progress.md).
 - Add a short "Learn" note (concept + one exercise) when a task uses a skill on the learning
   list: PyTorch, anomaly detection, online learning, SHAP, MLflow, LoRA, MCP server,

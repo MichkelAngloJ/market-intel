@@ -393,3 +393,18 @@
   on volatile stocks, nothing will work here and intraday cash equity is finished.
 - Reason (owner): Individual volatile stocks move far more than the Nifty 50/100 index, so they
   have a better chance of beating intraday costs; the system must still be free to say "no trade".
+
+## 2026-11-26 - Mutual funds: AMFI NAV data and the "how sure" stats engine
+- Decision: Build the mutual-fund module on official AMFI NAV (daily NAVAll.txt; historical in
+  90-day chunks, current official format verified live; community mfapi.in/mftool as a
+  documented fallback), for open-ended equity/hybrid/index growth funds, ~15 years. S6a
+  downloads and stores the NAV (resumable, polite, no data committed) and builds a per-fund
+  stats engine: rolling returns, CAGR, volatility, drawdown and fall-and-recovery distributions,
+  category-ranked, with a survivorship caveat and a "past performance is not advice" disclaimer
+  on every output. The lumpsum pick, SIP plan and keep-or-exit decisions follow in S6b.
+- Concern (planner): Mutual-fund outputs are investment-advice-shaped; the module must show
+  evidence and "how sure" ranges, never predicted returns or a promise to recover (SEBI).
+  Survivorship bias flatters historical stats and must be stated. AMFI is the honest source and
+  its 90-day limit must be respected.
+- Reason (owner): Mutual funds are priority 2; I want lumpsum and SIP guidance and a
+  keep-or-exit view, based on real history, with how-sure numbers.

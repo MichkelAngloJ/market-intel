@@ -206,7 +206,6 @@ def store_schemes(conn: Any, schemes: Iterable[mf.Scheme], *, seen: date) -> Mas
         )
     with conn.cursor() as cur:
         cur.executemany(SCHEME_UPSERT, rows)
-    conn.commit()
     return MasterResult(schemes=len(rows), universe=universe, by_category=by_category)
 
 
@@ -217,6 +216,7 @@ def sync_master(settings: Settings, *, on: date | None = None, reuse: bool = Tru
     schemes = read_schemes(path)
     with postgres.connect(settings.require("database")) as conn:
         result = store_schemes(conn, schemes, seen=on)
+        conn.commit()
     result.path = path
     result.downloaded_bytes = path.stat().st_size
     log.info(
@@ -280,9 +280,10 @@ def store_navs(conn: Any, rows: Iterable[mf.NavRow], *, source: str = SOURCE) ->
     """Insert NAV rows, ignoring ones already held. Returns the number actually written."""
     with conn.cursor() as cur:
         cur.execute(
-            "CREATE TEMP TABLE tmp_mf_nav (scheme_code integer, nav_date date, "
+            "CREATE TEMP TABLE IF NOT EXISTS tmp_mf_nav (scheme_code integer, nav_date date, "
             "nav numeric(14,4)) ON COMMIT DROP"
         )
+        cur.execute("TRUNCATE tmp_mf_nav")
         with cur.copy("COPY tmp_mf_nav (scheme_code, nav_date, nav) FROM STDIN") as copy:
             for row in rows:
                 copy.write_row((row.scheme_code, row.nav_date, row.nav))

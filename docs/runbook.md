@@ -562,6 +562,38 @@ risk budget, because the position would exceed the capital: with a 0.25% stop th
 binds and the trade risks about 0.25% of capital. Intraday (MIS) leverage is not modelled, and
 no command ever places an order.
 
+## Mutual funds (AMFI NAV)
+
+| Goal | Command |
+|---|---|
+| The scheme master only (fast, no history) | `uv run python -m market_intel.mf fetch --master` |
+| Say what a backfill would download | `uv run python -m market_intel.mf fetch --dry-run` |
+| About 15 years of daily NAV (hours) | `uv run python -m market_intel.mf fetch` |
+| A short run, for example overnight | `uv run python -m market_intel.mf fetch --limit 10` |
+| One fund's statistics | `uv run python -m market_intel.mf stats --scheme <code>` |
+| A whole category | `uv run python -m market_intel.mf stats --category equity --top 20` |
+
+**It takes hours, and that is AMFI's limit, not ours.** The history report serves at most 90
+days per request, so 15 years is about 65 requests; each returns roughly 70 MB and the server
+itself takes 60-110 seconds to build it. Expect a little over two hours for a full backfill
+and about 4.5 GB of raw files under `DATA_DIR/raw/amfi` (never committed).
+
+**Stopping it is safe.** Close the window, lose the connection, reboot: rerun the same command
+and it carries on. A chunk already downloaded is not downloaded again and a chunk already
+loaded is not parsed again, so a finished backfill rerun writes 0 rows. Chunks are fetched
+NEWEST FIRST, so an interrupted run leaves the most recent years in place.
+
+**If AMFI refuses**, the command stops and sends an alert; it does NOT fall back to another
+source on its own. mfapi.in and mftool are documented fallbacks to reach for by hand, and
+anything taken from them is stored with `source = 'mfapi'` so it can be told apart later.
+
+**Reading `mf stats`.** Every block is one fund. The rolling-return lines give worst / p10 /
+median / p90 / best across every start date in the history held - read the WORST column
+first, because that is the year somebody actually had. The fall-and-recovery lines say how
+many times the fund fell that far, how many of those falls got back to the same peak, how many
+are still under water, and the spread of how long the recoveries took. Every report ends with
+the survivorship note and the disclaimer; neither is decoration.
+
 ## News feeds and source health
 
 How it works: [architecture](architecture.md#news-and-exchange-feeds) and
