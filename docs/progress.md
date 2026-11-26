@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-26, HEAD 23dde7a. Updated at the end of every task (see
+Last updated: 2026-11-26, HEAD 6874630. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -20,11 +20,10 @@ Last updated: 2026-11-26, HEAD 23dde7a. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S5i-b (longer intraday hold, confidence calibration, plain-percentage reporting) done,
-  awaiting planner review. Next: a wider, more volatile universe (a separate task), then S6
-  (mutual funds: AMFI NAV, ranking, "how sure" history stats, split calculator with minimums,
-  keep/exit flags). 0.11 (remove the testing-laptop dependency) stays planned for not before
-  2026-12-03.
+- Now: S5i-c (wider volatile universe `movers100`, calibrated model) done, awaiting planner
+  review. The S series is complete. Next: S6 (mutual funds: AMFI NAV, ranking, "how sure"
+  history stats, split calculator with minimums, keep/exit flags). 0.11 (remove the
+  testing-laptop dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
   News RSS for the watchlist, polite rate); 1.3 Upstox login and token; 1.4 daily candles
@@ -184,7 +183,8 @@ Last updated: 2026-11-26, HEAD 23dde7a. Updated at the end of every task (see
 | S3 | done 2026-11-25 (HEAD c472d0a) | passed as engineering (planner, 2026-11-25) | Baselines + per-sector LightGBM (pooled fallback), walk-forward after costs, SHAP, MLflow, model registry (migration 0008); the models do NOT beat the baselines |
 | S4i | done 2026-11-25 (HEAD 55bedc8) | passed (planner, 2026-11-25) | 1-minute candles for the nifty50 universe, the Nifty 50, India VIX and 12 sector indices from 2022 (resumable, one month per request, thin days); the intraday timing convention; features v1 (41) and long/short triple-barrier labels as monthly Parquet with build records (migration 0009); the intraday leakage test (5 checks, 4 leaky fakes) in CI and on real data |
 | S5i | done 2026-11-25 (HEAD ad735f5) | passed (planner, 2026-11-25) | Labels v2 (ATR-scaled barriers, 3x3 grid) with its own leakage check; 8 rule strategies with mood and no-trade filters; intraday charges (official rates) and the shared capital-sizing component; event-driven backtest after costs with migration 0010 (backtest_runs, backtest_trades, model kind 'intraday'); LightGBM meta-model per side (monthly walk-forward, holdout scored once); backtest / train / report / replay commands. NOTHING beats `no_trading` |
-| S5i-b | done 2026-11-26 (HEAD 23dde7a) | awaiting planner review | Labels v3 (ATR barriers held 30 / 60 bars or to the close) with the ATR invariant checked separately; `intraday precision` (probability deciles and the top 10/5/1% most-confident signals with their net result after costs); plain-percentage reporting against `no_trading`. BOTH questions answered NO: holding longer does not beat the fee, and no confidence band is profitable |
+| S5i-b | done 2026-11-26 (HEAD 23dde7a) | passed (planner, 2026-11-26) | Labels v3 (ATR barriers held 30 / 60 bars or to the close) with the ATR invariant checked separately; `intraday precision` (probability deciles and the top 10/5/1% most-confident signals with their net result after costs); plain-percentage reporting against `no_trading`. BOTH questions answered NO: holding longer does not beat the fee, and no confidence band is profitable |
+| S5i-c | done 2026-11-26 (HEAD 6874630) | awaiting planner review | `movers100` (107 liquid, volatile NSE stocks incl. the owner's 7 picks) chosen from the daily candles; 47.8M 1-minute rows; features and labels v2; isotonic calibration fitted from EARLIER months only; a probability cache. Rules still have NO gross edge; the model's EV gate pays over the walk-forward but decays to negative by 2026 |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -205,6 +205,31 @@ Last updated: 2026-11-26, HEAD 23dde7a. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S5i-c (2026-11-26): local databases at 0010 (no migration). Universe `movers100`: 107
+  stocks (100 by volatility above a Rs 25 crore median-turnover floor, from 317 of 497
+  nifty500 members that cleared it, plus the owner's 7 named picks), median daily range
+  3.14% against the nifty500's 2.81%. Backfill: 120 instruments, 0 failed, 47,752,568 rows,
+  6,268 requests, 98 min (Upstox allows 1,600 requests per 30 min, so most of that is
+  waiting); 1,066 new thin days. Features v1: 8,610,550 rows, 1,257 MB, 31 min (relative
+  strength is 20.4% NULL because many mid-caps have no NSE sector index). Labels v2:
+  17,221,100 rows, 1,044 MB, 89 min; long k15_b10 target first 26.9% / stop 63.8%, average
+  gross -0.0083%; short 31.7% / 57.8%, +0.0097% - roughly 2.4x the nifty50 magnitudes in
+  BOTH directions. check-leakage on this universe: PASS (300 samples, 465 s).
+  THE DECISIVE NUMBERS. Rule strategies: the best gross edge at ZERO slippage is about
+  -0.06 bps a trade (net -8.36 bps, charges 8.3 bps) against the 8.3 bps floor, so no rule
+  has any gross edge at all; all eight ruined the account and `no_trading` won. The
+  volatility did remove the negative drift seen on nifty50 (gross there was about -4.2 bps)
+  but created nothing to pay the fee with. Meta-model: walk-forward AUC 0.572 (nifty50 was
+  0.532), holdout 0.532 long / 0.544 short; its backtest took 2,306 trades at +9.18 bps a
+  trade, +579.4%, Sharpe 2.44. That is NOT a validated edge: 82% of the profit is 2024
+  alone and the edge runs +5.15 (2022), +10.25 (2023), +13.27 (2024), +4.75 (2025),
+  -9.29 bps (2026), with the untouched holdout at -159 bps on 3 trades. The mechanism is
+  identifiable: ranked by probability alone NO confidence band pays (the most confident 1%
+  earns +2.30 bps gross long and +4.33 short against an 18.26 bps round trip), but the
+  expected-value gate multiplies probability by barrier distance and so selects moments
+  where the ATR-scaled target is wide - its trades average a 110 bps target against the
+  rules' 49 bps. Wide-barrier moments were plentiful in 2024 and are not now. Nothing
+  promoted. Health OK; backup 1.2 GB (82,123,542 rows), restore test OK.
 - S5i-b (2026-11-26): local databases at 0010 (no migration). Labels v3: 8,031,544 rows in
   59 Parquet files, 549 MB, 48 min; check-leakage --labels v3 on real data PASS (500 samples,
   418 s).
@@ -332,6 +357,22 @@ Last updated: 2026-11-26, HEAD 23dde7a. Updated at the end of every task (see
   day 23 Nov); the next incremental run picks it up.
 - S4: the models don't beat the baselines after costs; nothing may become `active`. Paper
   trading may run on the candidates to collect outcomes, clearly labelled as such.
+- The size of the move IS the binding constraint, and it is now measured. A 1.5x more
+  volatile universe doubled the gross move in both directions but left the rules with no
+  edge, because the fee does not shrink with volatility. The only thing that cleared the fee
+  was selecting moments where the ATR-scaled barrier is wide relative to the charge, and
+  that supply of moments is regime-dependent (abundant in 2024, scarce by 2026). If intraday
+  is revisited, that selection - not the signal type and not the holding time - is the thing
+  to study, and it needs an instrument whose cost per unit of movement is far lower
+  (index options or futures) rather than a more volatile cash stock.
+- A whole-period calibration is look-ahead. Fitting one isotonic mapping on every
+  walk-forward prediction and applying it back to those rows uses a month's own outcomes to
+  calibrate it; the walk-forward error collapsed to 0.000 while the holdout reached only
+  0.007. Each month is now calibrated from strictly earlier months. It changed the headline
+  by only 0.05 bps here, but the next model it is used on may not be so forgiving.
+- `feature_builds` has no universe column, so it cannot say where an incremental build
+  should resume; the files on disk decide. If a third universe arrives, giving that table a
+  universe column (a migration) would be cleaner than inferring it from paths.
 - Intraday is now measured out on large-cap cash equity: no rule and no model beats
   `no_trading` at any slippage down to zero, at any hold from 5 bars to the session close,
   and in no confidence band including the model's most confident 1%. The gross edge is under
