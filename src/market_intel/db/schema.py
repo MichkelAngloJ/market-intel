@@ -443,3 +443,80 @@ backtest_trades = Table(
     CheckConstraint("quantity > 0", name="quantity_positive"),
     Index(None, "run_id", "trade_date"),
 )
+
+
+# --- mutual funds (0011, S6a) --------------------------------------------------------------
+# AMFI's own classification, collapsed to the four groups the project reasons about. "index"
+# wins over "equity" when a scheme is both (an index fund is a rule, not a manager's choice).
+MF_CATEGORIES = ("equity", "hybrid", "index", "other")
+MF_SCHEME_TYPES = ("open", "close", "interval")
+MF_PLANS = ("direct", "regular", "unknown")
+MF_OPTIONS = ("growth", "idcw", "unknown")
+MF_NAV_SOURCES = ("amfi", "mfapi")  # mfapi is the documented fallback, never the primary
+MF_CHUNK_STATUSES = ("loaded", "failed")
+
+# One row per AMFI scheme code: a scheme code identifies a plan AND an option (Direct Growth
+# and Regular IDCW of the same fund are different codes), which is why plan and option are
+# columns here rather than something to parse out of the name later.
+mf_schemes = Table(
+    "mf_schemes",
+    metadata,
+    Column("scheme_code", Integer, primary_key=True, autoincrement=False),  # AMFI's own code
+    Column("scheme_name", Text, nullable=False),
+    Column("amc", Text, nullable=False),
+    Column("amfi_category", Text, nullable=False),  # the file's own heading, kept verbatim
+    Column("category", Text, nullable=False),  # equity / hybrid / index / other
+    Column("scheme_type", Text, nullable=False),  # open / close / interval
+    Column("plan", Text, nullable=False),
+    Column("option", Text, nullable=False),
+    Column("isin_growth", Text),
+    Column("isin_reinvest", Text),
+    Column("in_universe", Boolean, nullable=False, server_default=text("false")),
+    Column("first_seen", Date, nullable=False),  # first NAV date we hold
+    Column("last_seen", Date, nullable=False),
+    Column("updated_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    CheckConstraint(_in("category", MF_CATEGORIES), name="category"),
+    CheckConstraint(_in("scheme_type", MF_SCHEME_TYPES), name="scheme_type"),
+    CheckConstraint(_in("plan", MF_PLANS), name="plan"),
+    CheckConstraint(_in("option", MF_OPTIONS), name="option"),
+    CheckConstraint("last_seen >= first_seen", name="date_order"),
+    Index(None, "category", "in_universe"),
+)
+
+# Daily NAV. One row per scheme and date; a fund publishes at most one NAV a day, so the
+# primary key is also the dedupe rule and a rerun overwrites nothing it didn't change.
+mf_nav = Table(
+    "mf_nav",
+    metadata,
+    Column("scheme_code", Integer, ForeignKey("mf_schemes.scheme_code"), nullable=False),
+    Column("nav_date", Date, nullable=False),
+    Column("nav", Numeric(14, 4), nullable=False),
+    Column("source", Text, nullable=False),
+    Column("ingested_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    PrimaryKeyConstraint("scheme_code", "nav_date"),
+    CheckConstraint("nav > 0", name="nav_positive"),
+    CheckConstraint(_in("source", MF_NAV_SOURCES), name="source"),
+    Index(None, "nav_date"),
+)
+
+# One row per 90-day download (AMFI's limit per request). This is what makes `mf fetch`
+# resumable: a chunk already `loaded` is skipped, so an interrupted 15-year backfill carries
+# on where it stopped and a complete rerun writes nothing.
+mf_nav_chunks = Table(
+    "mf_nav_chunks",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("from_date", Date, nullable=False),
+    Column("to_date", Date, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("rows", BigInteger, nullable=False),
+    Column("bytes", BigInteger, nullable=False),
+    Column("sha256", Text, nullable=False),  # of the downloaded file, never of its contents
+    Column("fetched_at", TIMESTAMPTZ, nullable=False, server_default=NOW),
+    CheckConstraint(_in("source", MF_NAV_SOURCES), name="source"),
+    CheckConstraint(_in("status", MF_CHUNK_STATUSES), name="status"),
+    CheckConstraint("rows >= 0 AND bytes >= 0", name="counts_non_negative"),
+    CheckConstraint("to_date >= from_date", name="date_order"),
+    UniqueConstraint("from_date", "to_date", "source"),
+)

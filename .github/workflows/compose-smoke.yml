@@ -24,6 +24,9 @@ on:
       - "src/market_intel/intraday_models.py"
       - "src/market_intel/intraday_run.py"
       - "src/market_intel/universe.py"
+      - "src/market_intel/mf.py"
+      - "src/market_intel/mf_fetch.py"
+      - "src/market_intel/mf_cli.py"
       - "src/market_intel/sizing.py"
       - "src/market_intel/upstox.py"
       - "src/market_intel/features.py"
@@ -65,6 +68,9 @@ on:
       - "src/market_intel/intraday_models.py"
       - "src/market_intel/intraday_run.py"
       - "src/market_intel/universe.py"
+      - "src/market_intel/mf.py"
+      - "src/market_intel/mf_fetch.py"
+      - "src/market_intel/mf_cli.py"
       - "src/market_intel/sizing.py"
       - "src/market_intel/upstox.py"
       - "src/market_intel/features.py"
@@ -262,6 +268,19 @@ jobs:
 
       # S3: walk-forward training, baselines after costs, SHAP, MLflow and the registry on the
       # same synthetic data (both fake sectors are small, so only the pooled model trains).
+      # The mutual-fund module end to end on a FAKE AMFI file (no download): the scheme
+      # master, a NAV load, the resumable rule (a second load writes 0) and the real
+      # `mf stats` command, which must print the disclaimer and the survivorship note.
+      - name: "Mutual funds: scheme master, NAV load and stats on fake data"
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          uv run python scripts/fake_mf_data.py "$RUNNER_TEMP" | tee mf_load.txt
+          grep -q "second load wrote 0 rows" mf_load.txt
+          uv run python -m market_intel.mf stats --scheme 9100001 --min-years 0 | tee mf_stats.txt
+          grep -q "not investment advice" mf_stats.txt
+          grep -q "Survivorship bias" mf_stats.txt
+
       - name: Models train and report on fake data
         env:
           ALERT_DRY_RUN: "true"
