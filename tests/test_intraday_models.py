@@ -411,7 +411,7 @@ def test_the_calibration_report_shows_before_and_after(trained):
     result.holdout_predictions = trained.holdout_predictions.copy()
     M.calibrate(result, min_rows=100)
     text = "\n".join(M.calibration_lines(result))
-    assert "isotonic, fitted on the walk-forward only" in text
+    assert "one mapping over the whole walk-forward" in text  # the look-ahead scheme says so
     assert "->" in text and "top 1% said" in text
 
 
@@ -446,3 +446,45 @@ def test_a_missing_cache_reads_as_empty(tmp_path):
 
     settings = Settings(_env_file=None, app_profile="restricted", data_dir=str(tmp_path))
     assert M.load_predictions(settings, universe="nope", version="v2", variant="k15_b10").empty
+
+
+def test_expanding_calibration_never_uses_a_month_to_calibrate_itself(trained):
+    """calibrate() fits one mapping on every walk-forward row and then scores those same rows,
+    so its error collapses towards 0. The expanding scheme may only use earlier months, which
+    is what would have been available at the time (S5i-c)."""
+    import copy
+
+    def fresh():
+        r = copy.copy(trained)
+        r.predictions = trained.predictions.copy()
+        r.holdout_predictions = trained.holdout_predictions.copy()
+        r.calibrators = {}
+        return r
+
+    whole, rolling = fresh(), fresh()
+    M.calibrate(whole, min_rows=100)
+    M.calibrate_rolling(rolling, min_rows=100)
+    long_whole = whole.predictions[whole.predictions["side"] == "long"]
+    long_rolling = rolling.predictions[rolling.predictions["side"] == "long"]
+    assert M.calibration_error(long_whole, "probability_calibrated") <= M.calibration_error(
+        long_rolling, "probability_calibrated"
+    )  # scoring what you fitted always looks better
+    # the earliest month has no history to calibrate from, so it keeps the raw probability
+    assert "calibrated_from_history" in rolling.predictions
+    first = min(rolling.predictions["trade_date"])
+    earliest = rolling.predictions[rolling.predictions["trade_date"] == first]
+    assert not earliest["calibrated_from_history"].any()
+    assert earliest["probability_calibrated"].to_numpy() == pytest.approx(
+        earliest["probability_raw"].to_numpy()
+    )
+
+
+def test_the_report_names_the_expanding_scheme(trained):
+    import copy
+
+    result = copy.copy(trained)
+    result.predictions = trained.predictions.copy()
+    result.holdout_predictions = trained.holdout_predictions.copy()
+    M.calibrate_rolling(result, min_rows=100)
+    text = "\n".join(M.calibration_lines(result))
+    assert "each month from earlier months only" in text

@@ -726,7 +726,12 @@ def calibrate(result: TrainResult, *, min_rows: int = 500) -> dict[str, Calibrat
 
 def calibration_lines(result: TrainResult) -> list[str]:
     """Before and after, per side, so the fix can be checked rather than assumed."""
-    out = ["probability calibration (isotonic, fitted on the walk-forward only):"]
+    scheme = (
+        "expanding: each month from earlier months only"
+        if "calibrated_from_history" in result.predictions
+        else "one mapping over the whole walk-forward"
+    )
+    out = [f"probability calibration (isotonic, {scheme}):"]
     for side in SIDES:
         for period, frame in (
             ("walk-forward", result.predictions),
@@ -744,6 +749,12 @@ def calibration_lines(result: TrainResult) -> list[str]:
                 f"  {side:<5} {period:<12} error {before:.3f} -> {after:.3f};"
                 f" top 1% said {top['probability_raw'].mean():.1%} ->"
                 f" {top['probability_calibrated'].mean():.1%}, actual {top['y'].mean():.1%}"
+            )
+    if "calibrated_from_history" in result.predictions:
+        raw = int((~result.predictions["calibrated_from_history"]).sum())
+        if raw:
+            out.append(
+                f"  {raw:,} early rows had no calibration history yet and kept the raw probability"
             )
     if len(out) == 1:
         out.append("  not enough rows to calibrate")
@@ -792,3 +803,66 @@ def load_predictions(
     frame = pd.read_parquet(path)
     frame["trade_date"] = pd.to_datetime(frame["trade_date"]).dt.date
     return frame
+
+
+def calibrate_rolling(result: TrainResult, *, min_rows: int = 5_000) -> dict[str, Calibrator]:
+    """Calibrate each month from EARLIER months only (S5i-c, correcting a look-ahead).
+
+    :func:`calibrate` fits one mapping on every walk-forward prediction and applies it back to
+    those same rows, so the mapping for a month is built partly from that month's own outcomes
+    and from months after it. The calibration error then collapses to ~0 and the
+    expected-value gate looks far better informed than it could be live.
+
+    Here each test month is calibrated with a mapping fitted only on walk-forward predictions
+    from strictly earlier months, which is what would have been available at the time. The
+    first months have too little history to calibrate and keep their raw probability; they are
+    flagged in ``calibrated_from_history`` so a caller can drop them.
+
+    The holdout is different: every walk-forward month precedes it, so fitting on all of them
+    is legitimate and is what this does.
+    """
+    fitted: dict[str, Calibrator] = {}
+    frame = result.predictions
+    if frame.empty:
+        return fitted
+    months = pd.Series([month_of(d) for d in frame["trade_date"]], index=frame.index)
+    calibrated = frame["probability"].to_numpy(dtype=float).copy()
+    has_history = np.zeros(len(frame), dtype=bool)
+    positions = {m: i for i, m in enumerate(frame.index)}
+    for side in SIDES:
+        side_mask = (frame["side"] == side).to_numpy()
+        side_rows = frame[side_mask]
+        if side_rows.empty:
+            continue
+        side_months = months[side_mask]
+        for month in sorted(set(side_months)):
+            earlier = side_rows[(side_months < month).to_numpy()]
+            model = fit_calibrator(earlier, min_rows=min_rows)
+            if model is None:
+                continue
+            target = side_rows[(side_months == month).to_numpy()]
+            where = np.array([positions[i] for i in target.index])
+            calibrated[where] = model.apply(target["probability"].to_numpy(dtype=float))
+            has_history[where] = True
+            fitted[side] = model  # the last one fitted: everything before the holdout
+    frame["probability_raw"] = frame["probability"]
+    frame["probability_calibrated"] = calibrated
+    frame["calibrated_from_history"] = has_history
+    holdout = result.holdout_predictions
+    if not holdout.empty:
+        # every walk-forward month is before the holdout, so fitting on all of them is fair
+        full = {
+            side: fit_calibrator(frame[frame["side"] == side], min_rows=min_rows) for side in SIDES
+        }
+        values = holdout["probability"].to_numpy(dtype=float).copy()
+        for side, model in full.items():
+            if model is None:
+                continue
+            mask = (holdout["side"] == side).to_numpy()
+            if mask.any():
+                values[mask] = model.apply(values[mask])
+        holdout["probability_raw"] = holdout["probability"]
+        holdout["probability_calibrated"] = values
+        holdout["calibrated_from_history"] = True
+    result.calibrators = fitted
+    return fitted

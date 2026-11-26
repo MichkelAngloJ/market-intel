@@ -215,8 +215,10 @@ def run_train(
         raise ConfigError("no usable rows: build the features and labels first")
     result = M.run_training(dataset, config, progress=progress)
     # calibrate before anything uses the probability: S5i-b showed the raw numbers are badly
-    # overconfident at the top, and the expected-value gate trusts them directly
-    M.calibrate(result)
+    # overconfident at the top, and the expected-value gate trusts them directly. Each month
+    # is calibrated from EARLIER months only; fitting one mapping on the whole walk-forward
+    # and applying it back to those same rows is look-ahead (S5i-c).
+    M.calibrate_rolling(result)
     if save:
         M.save_predictions(settings, result, universe=universe, config=config)
     odds = {
