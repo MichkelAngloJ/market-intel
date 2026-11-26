@@ -204,7 +204,9 @@ def store_schemes(conn: Any, schemes: Iterable[mf.Scheme], *, seen: date) -> Mas
                 "seen": seen,
             }
         )
-    with conn.cursor() as cur:
+    # One transaction: autocommit would otherwise make 14,000 separate ones, and a master
+    # that is half written is worse than one that is not written at all.
+    with conn.transaction(), conn.cursor() as cur:
         cur.executemany(SCHEME_UPSERT, rows)
     return MasterResult(schemes=len(rows), universe=universe, by_category=by_category)
 
@@ -277,8 +279,16 @@ ON CONFLICT (scheme_code, nav_date) DO NOTHING
 
 
 def store_navs(conn: Any, rows: Iterable[mf.NavRow], *, source: str = SOURCE) -> int:
-    """Insert NAV rows, ignoring ones already held. Returns the number actually written."""
-    with conn.cursor() as cur:
+    """Insert NAV rows, ignoring ones already held. Returns the number actually written.
+
+    The whole load runs in ONE explicit transaction. That is not decoration: the project
+    opens Postgres connections with autocommit on, so a temp table declared ON COMMIT DROP
+    would be dropped the instant it was created. It also makes a chunk atomic - either its
+    rows land or none do - which is what lets `mf_nav_chunks` be trusted as the resume point.
+    IF NOT EXISTS and TRUNCATE cover the case where a caller has already opened a transaction
+    of its own and the table therefore outlives a single load.
+    """
+    with conn.transaction(), conn.cursor() as cur:
         cur.execute(
             "CREATE TEMP TABLE IF NOT EXISTS tmp_mf_nav (scheme_code integer, nav_date date, "
             "nav numeric(14,4)) ON COMMIT DROP"
