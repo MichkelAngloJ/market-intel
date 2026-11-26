@@ -118,12 +118,15 @@ def run_stats(settings, args: argparse.Namespace) -> int:
             print("No schemes match. Run `mf fetch --master` first.", file=sys.stderr)
             return 1
         t0 = time.monotonic()
-        series = mf_fetch.load_series(conn, args.scheme, category=args.category)
-    if not series:
+        unknown = ("?", "other")
+        # One fund at a time: a whole category's NAV does not fit comfortably in memory.
+        every = [
+            mf.fund_stats(code, *names.get(code, unknown), rows)
+            for code, rows in mf_fetch.iter_series(conn, args.scheme, category=args.category)
+        ]
+    if not every:
         print("No NAV history held for those schemes yet. Run `mf fetch`.", file=sys.stderr)
         return 1
-    unknown = ("?", "other")
-    every = [mf.fund_stats(code, *names.get(code, unknown), rows) for code, rows in series.items()]
     ranks = mf.rank_within_category(every)
     shown = [s for s in every if s.years >= args.min_years]
     shown.sort(key=lambda s: (-(s.cagr_since_start or -9), s.scheme_name))

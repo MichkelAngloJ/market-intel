@@ -167,3 +167,17 @@ def test_the_stats_engine_reads_its_series_back_out_of_the_database(conn, tmp_pa
     assert stats.max_drawdown.depth == 0.0  # the fake NAV only rises
     assert stats.rolling[1].count == 0  # 40 days is not a year
     assert stats.recovery[0.10].episodes == 0
+
+
+def test_streaming_one_fund_at_a_time_gives_the_same_series_as_loading_them_all(conn, tmp_path):
+    master = tmp_path / "NAVAll.txt"
+    master.write_text(fake_master(), encoding="utf-8")
+    mf_fetch.store_schemes(conn, mf_fetch.read_schemes(master), seen=date(2024, 3, 1))
+    history = tmp_path / "chunk.txt"
+    history.write_text(fake_history(date(2024, 3, 1), 30), encoding="utf-8")
+    mf_fetch.store_navs(conn, mf_fetch.nav_rows_for(history, mf_fetch.universe_codes(conn)))
+
+    whole = mf_fetch.load_series(conn, [EQUITY, INDEX])
+    streamed = dict(mf_fetch.iter_series(conn, [EQUITY, INDEX]))
+    assert streamed == whole
+    assert len(streamed) == 2

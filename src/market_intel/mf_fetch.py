@@ -439,12 +439,49 @@ def load_series(
         sql.append("AND s.category = %s")
         params.append(category)
     sql.append("ORDER BY n.scheme_code, n.nav_date")
-    out: dict[int, list[tuple[date, float]]] = {}
-    with conn.cursor() as cur:
-        cur.execute(" ".join(sql), params)
+    return dict(_stream(conn, " ".join(sql), params))
+
+
+def iter_series(
+    conn: Any, scheme_codes: Sequence[int] | None = None, *, category: str | None = None
+) -> Iterator[tuple[int, list[tuple[date, float]]]]:
+    """The same thing one fund at a time, so a whole category never sits in memory at once.
+
+    The equity category alone is about 1,100 funds and four million NAV rows; holding every
+    series while the statistics are computed is what ran a machine out of memory in S5i-c.
+    The rows arrive ordered by scheme, so each fund can be handed over and dropped.
+    """
+    sql = [
+        "SELECT n.scheme_code, n.nav_date, n.nav FROM mf_nav n",
+        "JOIN mf_schemes s ON s.scheme_code = n.scheme_code",
+        "WHERE s.in_universe",
+    ]
+    params: list[Any] = []
+    if scheme_codes:
+        sql.append("AND n.scheme_code = ANY(%s)")
+        params.append(list(scheme_codes))
+    if category:
+        sql.append("AND s.category = %s")
+        params.append(category)
+    sql.append("ORDER BY n.scheme_code, n.nav_date")
+    yield from _stream(conn, " ".join(sql), params)
+
+
+def _stream(
+    conn: Any, sql: str, params: list[Any]
+) -> Iterator[tuple[int, list[tuple[date, float]]]]:
+    current: int | None = None
+    rows: list[tuple[date, float]] = []
+    with conn.cursor(name="mf_series") as cur:  # a server-side cursor: no full result in RAM
+        cur.execute(sql, params)
         for code, nav_date, nav in cur:
-            out.setdefault(code, []).append((nav_date, float(nav)))
-    return out
+            if code != current:
+                if current is not None:
+                    yield current, rows
+                current, rows = code, []
+            rows.append((nav_date, float(nav)))
+    if current is not None:
+        yield current, rows
 
 
 def scheme_rows(conn: Any, scheme_codes: Sequence[int] | None = None) -> dict[int, tuple[str, str]]:
