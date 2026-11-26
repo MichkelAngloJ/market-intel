@@ -230,7 +230,10 @@ def run_train(
         probabilities = M.probabilities_for(result, holdout=holdout)
         if probabilities.empty:
             continue
-        rows = dataset.merge(probabilities, on=["instrument_id", "ts", "side"], how="inner")
+        # only the backtest's own columns: merging all 45 features of 15M rows needs gigabytes
+        # and the simulation never looks at a feature
+        slim = dataset[[c for c in BACKTEST_COLUMNS if c in dataset]]
+        rows = slim.merge(probabilities, on=["instrument_id", "ts", "side"], how="inner")
         if rows.empty:
             continue
         # the model trades the side it scored, so the signal is just that side
@@ -259,6 +262,21 @@ def run_train(
             B.save(conn, simulated)
     registered = M.register(conn, settings, result, use_mlflow=use_mlflow) if save else []
     return result, runs, registered
+
+
+# what the simulation reads; the features are not among them
+BACKTEST_COLUMNS = (
+    "instrument_id",
+    "trade_date",
+    "ts",
+    "minute",
+    "side",
+    "entry_price",
+    "outcome",
+    "gross_return",
+    "bars_held",
+    "atr",
+)
 
 
 def _as_backtest_rows(rows: pd.DataFrame, config: M.TrainConfig) -> pd.DataFrame:
