@@ -265,6 +265,28 @@ def loaded_chunks(conn: Any, *, source: str = SOURCE) -> set[tuple[date, date]]:
         return {(a, b) for a, b in cur.fetchall()}
 
 
+def covered(conn: Any, *, source: str = SOURCE) -> list[tuple[date, date]]:
+    """The loaded chunks merged into the fewest possible date ranges.
+
+    Resuming cannot key on the exact (from, to) pair. The chunk grid is built backwards from
+    whatever ``--to`` is given, so asking for one more day shifts every boundary and a
+    15-year backfill would download itself again. What actually matters is whether a planned
+    chunk's DATES are already held, so that is what is compared.
+    """
+    out: list[tuple[date, date]] = []
+    for a, b in sorted(loaded_chunks(conn, source=source)):
+        if out and a <= out[-1][1] + timedelta(days=1):
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def is_covered(ranges: Sequence[tuple[date, date]], start: date, end: date) -> bool:
+    """True when every day from ``start`` to ``end`` is inside one of ``ranges``."""
+    return any(a <= start and end <= b for a, b in ranges)
+
+
 def universe_codes(conn: Any) -> set[int]:
     with conn.cursor() as cur:
         cur.execute("SELECT scheme_code FROM mf_schemes WHERE in_universe")
@@ -332,8 +354,8 @@ def fetch(
         codes = universe_codes(conn)
         if not codes:
             raise RuntimeError("no universe schemes: run `mf fetch --master` first")
-        done = loaded_chunks(conn)
-        todo = [c for c in plan if c not in done]
+        done = covered(conn)
+        todo = [c for c in plan if not is_covered(done, *c)]
         log.info(
             "amfi nav backfill planned",
             extra={"chunks": len(plan), "already_loaded": len(plan) - len(todo)},

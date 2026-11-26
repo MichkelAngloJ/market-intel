@@ -335,3 +335,47 @@ def test_every_stats_output_carries_the_disclaimer_and_the_survivorship_note():
     assert "not indicative of future results" in mf.DISCLAIMER
     assert "not investment advice" in mf.DISCLAIMER
     assert "merged" in mf.SURVIVORSHIP_NOTE and "wound up" in mf.SURVIVORSHIP_NOTE
+
+
+# --- resuming a backfill ------------------------------------------------------------------
+def test_chunks_are_at_most_ninety_days_and_cover_the_whole_period():
+    from market_intel import mf_fetch
+
+    plan = mf_fetch.chunks(date(2011, 1, 1), date(2026, 8, 31))
+    assert all((b - a).days < 90 for a, b in plan)
+    assert plan[0][1] == date(2026, 8, 31)  # newest first
+    assert plan[-1][0] == date(2011, 1, 1)
+    # No gap and no overlap between neighbours.
+    for (_, earlier_end), (later_start, _) in zip(plan[1:], plan[:-1], strict=True):
+        assert later_start - earlier_end == timedelta(days=1)
+
+
+def test_a_rerun_with_a_different_end_date_does_not_refetch_what_is_already_held():
+    """The grid is built backwards from --to, so asking for one more day shifts every
+    boundary. Resuming therefore compares DATES, not chunk boundaries."""
+    from market_intel import mf_fetch
+
+    held = mf_fetch.chunks(date(2011, 1, 1), date(2026, 8, 31))
+    ranges = []
+    for a, b in sorted(held):
+        if ranges and a <= ranges[-1][1] + timedelta(days=1):
+            ranges[-1] = (ranges[-1][0], b)
+        else:
+            ranges.append((a, b))
+    assert len(ranges) == 1  # the whole period is one continuous span
+
+    shifted = mf_fetch.chunks(date(2011, 1, 1), date(2026, 11, 26))
+    todo = [c for c in shifted if not mf_fetch.is_covered(ranges, *c)]
+    # Only the genuinely new days are left, not the whole fifteen years.
+    assert len(todo) == 1
+    assert todo[0][1] == date(2026, 11, 26)
+    assert len(shifted) - len(todo) >= 60
+
+
+def test_coverage_needs_the_whole_chunk_not_merely_an_overlap():
+    from market_intel import mf_fetch
+
+    ranges = [(date(2020, 1, 1), date(2020, 6, 30))]
+    assert mf_fetch.is_covered(ranges, date(2020, 2, 1), date(2020, 3, 1))
+    assert not mf_fetch.is_covered(ranges, date(2020, 6, 1), date(2020, 7, 31))
+    assert not mf_fetch.is_covered(ranges, date(2019, 12, 1), date(2020, 1, 31))
