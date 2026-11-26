@@ -243,6 +243,7 @@ def run_select(
     source: str = DEFAULT_SOURCE,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     min_turnover: float = DEFAULT_MIN_TURNOVER,
+    history_before: date = HISTORY_BEFORE,
     picks: tuple[str, ...] = NAMED_PICKS,
     dry_run: bool = False,
 ) -> UniversePlan:
@@ -250,7 +251,13 @@ def run_select(
     candidates, missing = load_candidates(
         conn, source=source, lookback_days=lookback_days, picks=picks
     )
-    chosen, liquid = choose(candidates, size=size, min_turnover=min_turnover, picks=picks)
+    chosen, liquid = choose(
+        candidates,
+        size=size,
+        min_turnover=min_turnover,
+        history_before=history_before,
+        picks=picks,
+    )
     plan = UniversePlan(
         name=name,
         source=source,

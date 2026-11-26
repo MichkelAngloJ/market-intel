@@ -1388,6 +1388,12 @@ def main(argv: list[str] | None = None) -> int:
     pick.add_argument(
         "--min-turnover-crore", type=float, default=universe.DEFAULT_MIN_TURNOVER / universe.CRORE
     )
+    pick.add_argument(
+        "--history-before",
+        type=date.fromisoformat,
+        default=universe.HISTORY_BEFORE,
+        help="a stock needs daily history starting before this day",
+    )
     pick.add_argument("--dry-run", action="store_true")
 
     shown = sub.add_parser("report", help="the backtests stored so far")
@@ -1532,6 +1538,7 @@ def main(argv: list[str] | None = None) -> int:
                         source=args.source,
                         lookback_days=args.lookback_days,
                         min_turnover=args.min_turnover_crore * universe.CRORE,
+                        history_before=args.history_before,
                         dry_run=args.dry_run,
                     )
                     print("\n".join(plan.lines()))

@@ -247,10 +247,10 @@ jobs:
         env:
           ALERT_DRY_RUN: "true"
         run: |
-          uv run python -m market_intel.intraday select-universe --name zzmovers --size 3             --source nifty500 --min-turnover-crore 0 --dry-run | tee select_dry.txt
+          uv run python -m market_intel.intraday select-universe --name zzmovers --size 3             --source nifty50 --min-turnover-crore 0 --history-before 2022-06-01 \n            --dry-run | tee select_dry.txt
           grep -q "DRY RUN" select_dry.txt
-          uv run python -m market_intel.intraday select-universe --name zzmovers --size 3             --source nifty500 --min-turnover-crore 0 | tee select.txt
-          grep -q "rows written to universe_members" select.txt
+          uv run python -m market_intel.intraday select-universe --name zzmovers --size 3             --source nifty50 --min-turnover-crore 0 --history-before 2022-06-01 \n            | tee select.txt
+          grep -q "rows written to universe_members: 3" select.txt
           uv run python -m market_intel.intraday features build --universe zzmovers
           uv run python -m market_intel.intraday labels build --version v2 --universe zzmovers
           test -d data/features/intraday/zzmovers/v1
