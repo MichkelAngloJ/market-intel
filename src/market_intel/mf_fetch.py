@@ -482,7 +482,10 @@ def _stream(
 ) -> Iterator[tuple[int, list[tuple[date, float]]]]:
     current: int | None = None
     rows: list[tuple[date, float]] = []
-    with conn.cursor(name="mf_series") as cur:  # a server-side cursor: no full result in RAM
+    # A named (server-side) cursor needs a transaction block, and this project's connections
+    # are autocommit, so the transaction has to be opened explicitly. Without it Postgres
+    # refuses with "DECLARE CURSOR can only be used in transaction blocks".
+    with conn.transaction(), conn.cursor(name="mf_series") as cur:
         cur.execute(sql, params)
         for code, nav_date, nav in cur:
             if code != current:
