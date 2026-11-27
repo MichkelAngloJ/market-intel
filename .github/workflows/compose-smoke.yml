@@ -296,11 +296,18 @@ jobs:
           grep -q "SURVIVED A FALL" mf_lumpsum.txt
           grep -q "UNTESTED IN A DOWNTURN" mf_lumpsum.txt
           grep -q "independent" mf_lumpsum.txt
-          # The default window starts after the modelled crash, so asking for a longer one
-          # has to drop the fund that joined late rather than shorten itself.
+          # S6d: by DEFAULT the window is anchored on the modelled crash, and the fund that
+          # joined after it is named as untested rather than ranked or quietly dropped.
+          grep -q "anchored on the" mf_lumpsum.txt
+          grep -q "NOT RANKED" mf_lumpsum.txt
+          grep -q "ZZ Fake New Flexi Cap Fund" mf_lumpsum.txt
+          # The override gives the widest field back, on a window with no fall in it.
+          uv run python -m market_intel.mf lumpsum --amount 100000 --risk high             --allow-calm-window | tee mf_calm.txt
+          grep -q "the longest stretch EVERY eligible fund covers" mf_calm.txt
+          grep -q "NONE of those fall inside the shared window" mf_calm.txt
+          # A named window is honoured whatever it holds.
           uv run python -m market_intel.mf lumpsum --amount 100000 --risk high             --common-years 8 | tee mf_lump8.txt
           grep -q "the last 8 years, as asked" mf_lump8.txt
-          grep -q "do not cover this window" mf_lump8.txt
           grep -q "fall inside the shared window" mf_lump8.txt
           uv run python -m market_intel.mf sip --amount 3000 --years 2 --risk high --funds 2             | tee mf_sip.txt
           grep -q "STOP the SIP when" mf_sip.txt

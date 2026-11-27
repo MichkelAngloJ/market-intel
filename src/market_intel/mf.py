@@ -1355,12 +1355,22 @@ def common_window(
         end = min(s.last for s in eligible)
         start = _add_years(end, -years)
         covering = [s for s in eligible if s.first <= start]
-        window, codes = _window_over(covering, eligible, stale, asked_years=years)
-        if window.ok and window.start is not None:
-            # The named window is honoured whatever it holds; the report says which it is.
-            held = next((f for f in falls if window.holds(f)), None)
-            window = replace(window, fall=held, start=start)
-        return window, codes
+        if not covering or start >= end:
+            return CommonWindow(
+                None, None, stale=stale, too_short=len(eligible), asked_years=years
+            ), []
+        # Built with the REQUESTED start, not the widest one the funds would allow: the fall
+        # check has to run against the window actually used, or it answers the wrong question.
+        window = CommonWindow(
+            start=start,
+            end=end,
+            funds=len(covering),
+            stale=stale,
+            too_short=len(eligible) - len(covering),
+            asked_years=years,
+        )
+        held = next((f for f in falls if window.holds(f)), None)
+        return replace(window, fall=held), sorted(s.scheme_code for s in covering)
 
     if require_fall:
         if not falls:

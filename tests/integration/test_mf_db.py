@@ -397,3 +397,30 @@ def test_a_reference_built_from_the_database_finds_the_fall_written_into_it(conn
     assert fall.trough_date is not None
     # Both fake funds were there for the whole of it.
     assert mf.falls_lived_through(index.start, index.end, [fall]) == 1
+
+
+def test_the_default_window_read_from_the_database_is_anchored_on_a_real_fall(conn, tmp_path):
+    """S6d: the default must land on a window that contains the modelled crash."""
+    load_fake(conn, tmp_path, days=3_300, late_start=1_000)
+    spans = mf_fetch.nav_spans(conn, [EQUITY, INDEX])
+
+    # Only the equity fund, and min_funds=1: the index fund joins after the crash, so a
+    # reference that waits for two funds cannot see the crash at all. The real universe has
+    # hundreds reporting throughout; this fixture has two.
+    builder = mf.Reference()
+    for _code, rows in mf_fetch.iter_series(conn, [EQUITY]):
+        builder.add(mf.Series.build(rows))
+    falls = mf.reference_falls(builder.build(min_funds=1))
+    assert falls, "the fake data has a crash in it, so the reference must find one"
+
+    window, covering = mf.common_window(spans, falls=falls)
+    assert window.fall is not None
+    assert window.holds(window.fall)
+    assert window.no_fall_reason is None
+    # The index fund joined a thousand days in, after the crash, so it cannot be ranked here.
+    assert covering == [EQUITY]
+    assert window.too_short == 1
+
+    calm, calm_covering = mf.common_window(spans, falls=falls, require_fall=False)
+    assert calm_covering == [EQUITY, INDEX]  # the override gives the wider field back
+    assert calm.fall is None

@@ -461,3 +461,188 @@ def test_the_common_years_option_is_available_on_the_ranking_command():
     )
     assert args.common_years == 10
     assert parser.parse_args(["lumpsum", "--amount", "1", "--risk", "high"]).common_years is None
+
+
+# --- the default window has to contain a real fall (S6d) ------------------------------------
+def a_fall(peak: date, trough: date, depth: float = 0.37) -> mf.Episode:
+    return mf.Episode(
+        peak_date=peak,
+        peak_nav=100.0,
+        reached_on=peak + timedelta(days=30),
+        depth=depth,
+        recovered_on=trough + timedelta(days=200),
+        trough_date=trough,
+    )
+
+
+CRASH = a_fall(date(2020, 1, 24), date(2020, 3, 23))
+OLDER_CRASH = a_fall(date(2011, 1, 4), date(2011, 12, 20), depth=0.25)
+END = date(2026, 11, 25)
+
+
+def test_the_default_window_contains_the_most_recent_fall():
+    spans = [
+        span(1, date(2011, 1, 1), END),
+        span(2, date(2018, 6, 1), END),
+        span(3, date(2021, 11, 15), END),  # after the crash: cannot be ranked over it
+    ]
+    window, covering = mf.common_window(spans, falls=[OLDER_CRASH, CRASH])
+
+    assert covering == [1, 2]
+    assert window.fall is CRASH, "the most recent fall, not the oldest"
+    assert window.holds(CRASH)
+    assert window.start == date(2018, 6, 1)  # the longest window those two share
+    assert window.end == END
+    assert window.no_fall_reason is None
+
+
+def test_a_fund_that_missed_the_fall_is_counted_as_untested_not_discarded():
+    spans = [
+        span(1, date(2011, 1, 1), END),
+        span(2, date(2021, 6, 1), END),
+        span(3, date(2021, 11, 15), END),
+    ]
+    window, covering = mf.common_window(spans, falls=[CRASH])
+
+    assert covering == [1]
+    assert window.too_short == 2  # both are named on the report, not dropped
+    assert window.holds(CRASH)
+
+
+def test_the_window_stretches_back_as_far_as_every_ranked_fund_allows():
+    """It is the LONGEST window containing the fall, not merely the fall itself."""
+    spans = [span(1, date(2011, 1, 1), END), span(2, date(2013, 5, 2), END)]
+    window, _covering = mf.common_window(spans, falls=[CRASH])
+    assert window.start == date(2013, 5, 2)
+    assert window.years > 13
+
+
+def test_a_fund_that_stopped_before_the_bottom_cannot_anchor_the_window():
+    spans = [
+        span(1, date(2011, 1, 1), END),
+        span(2, date(2011, 1, 1), date(2020, 2, 10)),  # gone before the trough, and stale
+    ]
+    window, covering = mf.common_window(spans, falls=[CRASH])
+    assert covering == [1]
+    assert window.stale == 1
+
+
+def test_the_calm_window_override_gives_back_the_widest_field():
+    spans = [
+        span(1, date(2011, 1, 1), END),
+        span(2, date(2021, 11, 15), END),
+    ]
+    anchored, ranked_through_fall = mf.common_window(spans, falls=[CRASH])
+    calm, ranked_calm = mf.common_window(spans, falls=[CRASH], require_fall=False)
+
+    assert ranked_through_fall == [1]
+    assert ranked_calm == [1, 2]  # the wider field is the point of asking
+    assert calm.start == date(2021, 11, 15)
+    assert calm.fall is None
+    assert not calm.holds(CRASH)
+    assert anchored.funds < calm.funds
+
+
+def test_a_named_window_is_honoured_and_says_whether_it_holds_a_fall():
+    spans = [span(1, date(2011, 1, 1), END), span(2, date(2013, 1, 1), END)]
+    with_fall, _ = mf.common_window(spans, years=10, falls=[CRASH])
+    without, _ = mf.common_window(spans, years=3, falls=[CRASH])
+
+    assert with_fall.asked_years == 10
+    assert with_fall.fall is CRASH
+    assert without.asked_years == 3
+    assert without.fall is None  # three years from 2026 does not reach 2020
+    assert without.no_fall_reason is None  # it was asked for, not fallen back to
+
+
+def test_no_fall_anywhere_falls_back_loudly_instead_of_returning_nothing():
+    spans = [span(1, date(2011, 1, 1), END), span(2, date(2015, 1, 1), END)]
+    window, covering = mf.common_window(spans, falls=[])
+
+    assert covering == [1, 2]  # it still ranks, rather than refusing
+    assert window.ok
+    assert window.fall is None
+    assert window.no_fall_reason is not None
+    assert "no decline" in window.no_fall_reason
+
+
+def test_a_fall_no_eligible_fund_lived_through_falls_back_loudly_too():
+    future_crash = a_fall(date(2026, 1, 5), date(2026, 2, 5))
+    spans = [span(1, date(2011, 1, 1), date(2025, 12, 1))]
+    window, covering = mf.common_window(spans, falls=[future_crash])
+
+    assert covering == [1]
+    assert window.no_fall_reason is not None
+    assert "was reporting through" in window.no_fall_reason
+
+
+def test_the_loud_notice_reaches_the_report_rather_than_staying_in_the_object():
+    window = mf.CommonWindow(
+        start=date(2016, 1, 1),
+        end=END,
+        funds=10,
+        no_fall_reason="no decline of 20% or more exists anywhere in the market reference",
+    )
+    text = "\n".join(mf_cli.window_lines(window, measured=12))
+    assert "!! NO FALL IN THE WINDOW" in text
+    assert "only rose" in text
+    assert "NOTHING about who holds up in a decline" in text
+
+
+def test_the_report_says_the_window_was_anchored_on_a_fall_and_names_it():
+    window = mf.CommonWindow(start=date(2020, 1, 3), end=END, funds=387, too_short=75, fall=CRASH)
+    text = "\n".join(mf_cli.window_lines(window, measured=1128))
+    assert "anchored on the 37% fall of 2020-01-24 to 2020-03-23" in text
+    assert "UNTESTED IN A DOWNTURN" in text
+    assert "75 fund(s)" in text
+
+
+def test_a_named_window_without_a_fall_is_flagged_on_the_report():
+    window = mf.CommonWindow(start=date(2022, 11, 25), end=END, funds=47, asked_years=4)
+    text = "\n".join(mf_cli.window_lines(window, measured=370))
+    assert "the last 4 years, as asked" in text
+    assert "contains no decline" in text
+
+
+def test_the_funds_left_out_are_named_rather_than_only_counted():
+    got = Measured_for([(1, "Old Fund", date(2011, 1, 1)), (2, "New Fund", date(2021, 11, 15))])
+    text = "\n".join(mf_cli.untested_lines(got))
+    assert "NOT RANKED" in text
+    assert "New Fund [2]" in text
+    assert "NAV from 2021-11-15" in text
+    assert "Not a verdict on any of them" in text
+    assert "mf stats --scheme" in text
+
+
+def test_nothing_is_printed_when_every_eligible_fund_was_ranked():
+    got = Measured_for([], untested=())
+    assert mf_cli.untested_lines(got) == []
+
+
+def Measured_for(funds, untested=(2,)):
+    """A Measured with just enough in it to render the not-ranked list."""
+    full = {}
+    for code, name, first in funds:
+        full[code] = mf.FundStats(
+            scheme_code=code,
+            scheme_name=name,
+            category="equity",
+            start=first,
+            end=END,
+            observations=100,
+            years=(END - first).days / 365.25,
+            cagr_since_start=0.12,
+            volatility=0.15,
+            max_drawdown=mf.Drawdown(depth=0.2),
+        )
+    return mf_cli.Measured(
+        full=full,
+        windowed={},
+        falls=[CRASH],
+        reference=mf.Series((), ()),
+        reference_funds=0,
+        details={},
+        window=mf.CommonWindow(start=date(2020, 1, 3), end=END, funds=1, fall=CRASH),
+        seconds=0.0,
+        untested=untested,
+    )
