@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-27, HEAD 17f4d2d. Updated at the end of every task (see
+Last updated: 2026-11-27, HEAD 02d1fe9. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -21,7 +21,8 @@ Last updated: 2026-11-27, HEAD 17f4d2d. Updated at the end of every task (see
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
 - Now: S6c (honest lumpsum ranking: common period, survived-a-fall flag, independent
-  windows) in progress. S6a and S6b reviews both PASSED (planner, 2026-11-27). 0.11 (remove the testing-laptop
+  windows) done, awaiting planner review. S6a and S6b reviews both PASSED (planner,
+  2026-11-27). 0.11 (remove the testing-laptop
   dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -200,6 +201,7 @@ Last updated: 2026-11-27, HEAD 17f4d2d. Updated at the end of every task (see
 | S5i-c | done 2026-11-26 (HEAD 6874630) | awaiting planner review | `movers100` (107 liquid, volatile NSE stocks incl. the owner's 7 picks) chosen from the daily candles; 47.8M 1-minute rows; features and labels v2; isotonic calibration fitted from EARLIER months only; a probability cache. Rules still have NO gross edge; the model's EV gate pays over the walk-forward but decays to negative by 2026 |
 | S6a | done 2026-11-27 (HEAD d35852c) | awaiting planner review | Mutual funds, the data and evidence half. Official AMFI NAV (NAVAll.txt and the 90-day history report, both verified live and parsed by their own header because their column orders differ); migration 0011 (mf_schemes, mf_nav, mf_nav_chunks); a resumable, polite backfill; and a per-fund stats engine (rolling returns, CAGR, volatility, drawdown, fall-and-recovery distributions, category percentiles) with a disclaimer and a survivorship note on every output |
 | S6b | done 2026-11-27 (HEAD 17f4d2d) | awaiting planner review | Mutual funds, the decision half, offline and storing nothing. `mf lumpsum` (a ranking on three historical measures at once, inside a measured risk band), `mf sip` (a split across fund houses with each scheme's minimum, and the best/median/worst of that exact plan over every rolling window, with a plain stop rule) and `mf keep-or-exit` (what this fund and its whole category did after falls of the same depth, against the owner's horizon). The minimum-history rule - rank at 5 years, flag 3 to 5, refuse under 3 - is shared by all three and printed on every output. No migration |
+| S6c | done 2026-11-27 (HEAD 02d1fe9) | awaiting planner review | The lumpsum ranking made comparable. The headline rank is computed over ONE window every ranked fund covers (`--common-years` demands a longer one; stale funds are dropped first so a dead fund cannot drag its end back). Each fund carries a survived-a-fall or untested-in-a-downturn flag, measured against a broad reference built from the sixty longest-lived funds held, which finds the 2011 and 2020 declines. Every spread is reported over non-overlapping windows as well as overlapping ones. No migration, nothing stored |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -220,6 +222,11 @@ Last updated: 2026-11-27, HEAD 17f4d2d. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S6c (2026-11-27): local databases unchanged, still at 0011. S6c computes on demand and
+  stores nothing. Of 1,128 Direct-plan funds, 467 have the five years the ranking needs and 17
+  are stale. The automatic shared window is 2021-11-15 to 2026-11-25 (5.0 years) and contains
+  NO decline of 20% or more; `--common-years 10` gives 2016-11-25 to 2026-11-25, 302 funds,
+  with the 2020 crash inside it. A whole-universe `mf lumpsum` takes about 70 seconds.
 - S6b (2026-11-27): local databases unchanged, still at 0011. S6b computes on demand and
   stores nothing, so there is no migration and no new table. The universe used: 2,255 funds,
   of which 1,128 are Direct plans; 938 have the five years the ranking needs. A whole-universe
@@ -411,6 +418,23 @@ Last updated: 2026-11-27, HEAD 17f4d2d. Updated at the end of every task (see
   calibrate it; the walk-forward error collapsed to 0.000 while the holdout reached only
   0.007. Each month is now calibrated from strictly earlier months. It changed the headline
   by only 0.05 bps here, but the next model it is used on may not be so forgiving.
+- The default shared window contains no market decline. It is the longest stretch EVERY
+  eligible fund covers, so the most recently launched eligible fund sets it, and on the data
+  held that is about five years of a market that only rose. The comparison is fair but it is
+  a comparison on calm; `--common-years 10` is what buys a window with 2020 in it, at the
+  cost of dropping 160 funds. Anything built on the ranking should say which window it used.
+- The market reference has to span EVERY plan. SEBI created Direct plans only in January
+  2013, so a Direct-only reference starts in 2013 and cannot see the 2011 fall at all. It is
+  also built from the funds that still exist, so it carries the same survivorship bias as
+  everything else here and is a yardstick for WHEN the market fell, never a benchmark.
+- A category's own index is useless as a decline yardstick for the quieter categories: the
+  hybrid index never fell 20% even in 2020, so judging hybrid funds against it marked every
+  single one "untested", including the ones that sat through the crash. One broad equity
+  reference is used for all categories instead.
+- Non-overlapping windows are not simply the honest version of overlapping ones. They use
+  each stretch of market once, but there are few of them and a fall landing across a boundary
+  can be split between two windows and show up in neither - one real fund shows a worst year
+  of -27.9% overlapping and -5.5% independent. Both are printed; the narrower is not safer.
 - An AMFI scheme code is a plan AND an option, so every fund is in the universe twice,
   Direct and Regular, with nearly the same NAV. `mf lumpsum` and `mf sip` therefore rank ONE
   plan at a time and default to Direct, and `mf keep-or-exit` pools its category evidence over
