@@ -644,6 +644,39 @@ of this.
 Nothing in any of the three is a prediction, a score, or a recommendation, and no result is
 stored.
 
+### Reading a ranking that compares like with like (S6c)
+
+`mf lumpsum` and `mf sip` rank over ONE window every ranked fund covers, not over each fund's
+own history. The report states the window, who covers it and who was dropped:
+
+| Goal | Command |
+|---|---|
+| The default: the longest window every eligible fund shares | `uv run python -m market_intel.mf lumpsum --amount 500000 --risk medium` |
+| A window long enough to contain a crash | `... lumpsum --amount 500000 --risk medium --common-years 10` |
+| The same for a plan | `... sip --amount 25000 --years 7 --risk medium --min-history 12` |
+
+**Why the default window is short.** It is the longest stretch EVERY eligible fund covers, so
+the most recently launched eligible fund sets it - about five years on the data held, which
+contains no decline of 20% or more. The report says so in as many words. `--common-years 10`
+goes back far enough to include 2020 and drops the funds that cannot cover it; the count of
+funds dropped is printed, because a smaller, older field is the price of a fairer comparison.
+
+**The flag beside each fund.** `SURVIVED A FALL` means the fund was already reporting when a
+broad reference peaked and still reporting at the bottom. `UNTESTED IN A DOWNTURN` means there
+is no such decline anywhere in its history: not a fault, not a prediction, just a record that
+says nothing about how the fund behaves when the market falls. Take it seriously on a fund
+launched after 2020.
+
+**Two spreads, not one.** Every rolling figure prints an overlapping and an independent
+version. The overlapping one has many more windows, but they share almost all of their
+history, so their number overstates how much evidence there is. The independent one uses each
+stretch of market once, but there are few of them and a fall straddling a boundary can vanish
+from both. Read both; the narrower is not the safer.
+
+**Timing.** The shared window costs almost nothing: it comes from an aggregate over the stored
+dates, so the series are still read only once. The market reference adds a short pass over
+sixty funds. A whole-universe `mf lumpsum` runs in about fifty seconds.
+
 ## News feeds and source health
 
 How it works: [architecture](architecture.md#news-and-exchange-feeds) and

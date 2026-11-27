@@ -425,3 +425,16 @@
   similarity model.
 - Reason (owner): I want lumpsum and SIP guidance and a keep-or-exit decision, based on real
   history, with how-sure numbers.
+
+## 2026-11-27 - Honest lumpsum ranking: common period, survived-a-fall flag, independent windows
+- Decision: Rank lumpsum candidates over the longest trailing window that every eligible fund
+  shares, so funds of different ages are compared on the same market, and flag each fund by
+  whether its own history has lived through a significant decline ("untested in a downturn"
+  otherwise). Report non-overlapping windows alongside the overlapping ones so the spread is not
+  understated. Full-history stats stay as context; nothing predicted, nothing stored.
+- Concern (planner): S6b ranked each fund on its own history, so a 2020-vintage fund that never
+  saw a crash could top the table on a flattering worst case. A common period and a survived-a-
+  fall flag remove that; overlapping windows overstate confidence, which the independent-window
+  figure corrects.
+- Reason (owner): I want the lumpsum ranking safe to use for real money - funds compared fairly,
+  and clear which ones have never been through a fall.

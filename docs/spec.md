@@ -205,6 +205,12 @@ Decision 2026-11-22:
   are ranked, 3-5 years is flagged, and under 3 years is "too new to judge" - a new fund needs
   a model of funds LIKE it, which is deferred and not built here. Nothing is stored and no
   migration was added.
+- S6c (done): the honest ranking. The headline rank is computed over ONE window every ranked
+  fund covers (`--common-years` to demand a longer one), each fund carries a survived-a-fall
+  or untested-in-a-downturn flag measured against a broad reference built from the funds
+  themselves, and every spread is reported over non-overlapping windows as well as
+  overlapping ones. Nothing stored, no migration. The finding this surfaced: the default
+  shared window on the data held contains no decline at all, which the report states.
 - HONESTY (SEBI): evidence only. No predicted returns, no profit or accuracy claims, no
   promise that a fall will be recovered. Every statistics output carries "Past performance is
   not indicative of future results; information, not investment advice" and the survivorship

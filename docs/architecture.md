@@ -1246,6 +1246,65 @@ What none of the three do: predict a return, score a fund's quality, promise a r
 act. Every output ends with the survivorship note and "past performance is not indicative of
 future results".
 
+### Comparing funds of different ages (S6c)
+
+S6b ranked every fund on its OWN history, and five years is not the same five years. A fund
+whose NAV begins in mid-2020 starts at the bottom of a crash: its worst case is the worst of a
+lucky stretch, and it can top a table without ever having been through a fall. Three changes
+fix that, and all three are visible on the report rather than applied quietly.
+
+**One shared window.** The headline ranking is computed over a single stretch of market that
+every ranked fund covers: the longest trailing window all of them share, or the last N years
+with `--common-years`. Funds that have the five years but not that window are named and left
+out rather than squeezed in. Eligibility for the window uses the minimum-history rule ALONE,
+not the risk band, so the window does not move when a ceiling changes.
+
+A fund that has stopped reporting is dropped first. One dead fund would otherwise drag the
+window's end back by years and take every live fund's recent history with it.
+
+Over a shared window a plain CAGR is directly comparable, which it never is across different
+spans, so the three measures change with the period:
+
+| Own history (S6b) | Shared window (S6c) |
+|---|---|
+| return a year per unit of deepest fall | the same, over the window |
+| the middle 5-year window | plain CAGR over the window - the same market for everyone |
+| the worst 3-year window | the worst YEAR inside the window |
+
+The 5-year and 3-year measures barely exist inside a window that is itself about five years
+long, which is why they are not used there. `return_per_fall` also floors the denominator at
+1%: dividing by a near-zero fall makes the ratio say more about the denominator than the fund.
+
+**A survived-a-fall flag.** There is no index data in this project, so the yardstick is built
+out of the funds themselves: an equal-weighted, daily-rebalanced index of the sixty
+longest-lived equity and index funds held. Averaging RETURNS rather than levels is what lets
+funds join and leave without putting a step in the series, and a daily move beyond 50% is
+dropped as a data error rather than allowed to invent a crash. On the data held it finds two
+declines of 20% or more: 2011 (-25%) and 2020 (-37%).
+
+A fund is marked `survived a fall` only if it was already reporting at the PEAK and still
+reporting at the trough; joining halfway down means its record starts at a price that had
+already fallen, which is the flattering case the flag exists to catch. Everything else reads
+`untested in a downturn` - not a fault and not a prediction, but a statement that its record
+says nothing about how it behaves when the market falls.
+
+The reference deliberately spans EVERY plan. SEBI only created Direct plans in January 2013,
+so a Direct-only reference cannot see 2011 at all. It also inherits the survivorship bias of
+the data it is made from, so it is a yardstick for when the market fell, never a benchmark a
+fund is scored against.
+
+**Windows that do not overlap.** Rolling windows a day or a month apart share almost all of
+their history, so a hundred of them are nowhere near a hundred tries. Every spread is now
+reported twice: as usually calculated, and again over non-overlapping windows that use each
+stretch of market exactly once. Neither is the safe one to read - there are few independent
+windows, and a fall landing across a boundary can be split between two of them and show up in
+neither - so both are printed and the report says why.
+
+**What this exposed.** With the data held, the automatic shared window is about five years and
+contains NO decline at all, so by default every fund is compared fairly but on a market that
+only rose. The report says exactly that and points at `--common-years`, which is the lever that
+buys a window with 2020 in it.
+
 ## Models, evaluation, costs and the registry
 
 Sprint task S3 (decisions 2026-11-24). Command: `market_intel.models` (`train`, `report`, `ui`);
