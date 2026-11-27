@@ -281,6 +281,24 @@ jobs:
           grep -q "not investment advice" mf_stats.txt
           grep -q "Survivorship bias" mf_stats.txt
 
+      - name: "Mutual funds: lumpsum, SIP and keep-or-exit on fake data"
+        env:
+          ALERT_DRY_RUN: "true"
+        run: |
+          uv run python -m market_intel.mf lumpsum --amount 100000 --risk high --top 1             | tee mf_lumpsum.txt
+          grep -q "too new to judge" mf_lumpsum.txt
+          grep -q "Survivorship bias" mf_lumpsum.txt
+          grep -q "not investment advice" mf_lumpsum.txt
+          uv run python -m market_intel.mf sip --amount 3000 --years 5 --risk high --funds 2             | tee mf_sip.txt
+          grep -q "STOP the SIP when" mf_sip.txt
+          grep -q "annualised (XIRR)" mf_sip.txt
+          grep -q "not investment advice" mf_sip.txt
+          uv run python -m market_intel.mf keep-or-exit --fund 9100001 --invested 100000             --current 80000 --horizon-years 3 | tee mf_keep.txt
+          grep -q "Keep or exit" mf_keep.txt
+          grep -q "days to get back" mf_keep.txt
+          grep -q "Survivorship bias" mf_keep.txt
+          grep -q "not investment advice" mf_keep.txt
+
       - name: Models train and report on fake data
         env:
           ALERT_DRY_RUN: "true"

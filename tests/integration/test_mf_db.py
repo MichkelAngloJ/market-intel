@@ -81,6 +81,49 @@ def fake_history(start: date, days: int) -> str:
     return head + "\n".join(rows) + "\n"
 
 
+def fake_history_with_a_fall(start: date, days: int) -> str:
+    """Six years of rising NAV with one deliberate 30% fall and recovery in the middle.
+
+    The S6b commands need enough history to pass the five-year rule and something real to
+    find: a straight line would make every recovery statistic empty.
+    """
+    head = (
+        "Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;"
+        "Net Asset Value;Date\n\nOpen Ended Schemes ( Equity Scheme - Large Cap Fund )\n\n"
+        "ZZ Fake Mutual Fund\n\n"
+    )
+
+    def nav(i: int, base: float) -> float:
+        level = base * (1.0 + 0.0004) ** i
+        if 600 <= i < 700:  # the fall
+            level *= 1.0 - 0.30 * (i - 600) / 100
+        elif 700 <= i < 1000:  # the climb back
+            level *= 0.70 + 0.30 * (i - 700) / 300
+        return level
+
+    rows = []
+    for i in range(days):
+        d = (start + timedelta(days=i)).strftime("%d-%b-%Y")
+        rows.append(
+            f"{EQUITY};ZZ Fake Large Cap Fund - Direct - Growth;Direct Plan;Growth;"
+            f"INFZZZ000001;-;{nav(i, 100.0):.4f};{d}"
+        )
+        rows.append(
+            f"{INDEX};ZZ Fake Nifty 50 Index Fund - Direct - Growth;Direct Plan;Growth;"
+            f"INFZZZ000002;-;{nav(i, 50.0):.4f};{d}"
+        )
+    return head + "\n".join(rows) + "\n"
+
+
+def load_fake(conn, tmp_path, days: int, start: date = date(2019, 1, 1)) -> None:
+    master = tmp_path / "NAVAll.txt"
+    master.write_text(fake_master(), encoding="utf-8")
+    mf_fetch.store_schemes(conn, mf_fetch.read_schemes(master), seen=start)
+    history = tmp_path / "chunk.txt"
+    history.write_text(fake_history_with_a_fall(start, days), encoding="utf-8")
+    mf_fetch.store_navs(conn, mf_fetch.nav_rows_for(history, mf_fetch.universe_codes(conn)))
+
+
 def test_the_three_tables_exist_and_the_app_login_can_use_them(conn):
     for table in ("mf_schemes", "mf_nav", "mf_nav_chunks"):
         conn.execute(f"SELECT count(*) FROM {table}").fetchone()
@@ -181,3 +224,83 @@ def test_streaming_one_fund_at_a_time_gives_the_same_series_as_loading_them_all(
     streamed = dict(mf_fetch.iter_series(conn, [EQUITY, INDEX]))
     assert streamed == whole
     assert len(streamed) == 2
+
+
+# --- the S6b decision commands, against the database ---------------------------------------
+def test_scheme_details_carry_the_fund_house_a_sip_plan_needs(conn, tmp_path):
+    master = tmp_path / "NAVAll.txt"
+    master.write_text(fake_master(), encoding="utf-8")
+    mf_fetch.store_schemes(conn, mf_fetch.read_schemes(master), seen=date(2024, 3, 1))
+
+    details = mf_fetch.scheme_details(conn, [EQUITY, INDEX, DEBT])
+    assert set(details) == {EQUITY, INDEX}  # the debt fund is not in the universe
+    assert details[EQUITY].amc == "ZZ Fake Mutual Fund"
+    assert details[EQUITY].category == "equity"
+    assert details[INDEX].category == "index"
+
+
+def test_the_minimum_history_rule_is_applied_to_what_the_database_actually_holds(conn, tmp_path):
+    load_fake(conn, tmp_path, days=700)  # under two years: too new to judge
+    stats = [
+        mf.fund_stats(code, f"fund {code}", "equity", rows)
+        for code, rows in mf_fetch.iter_series(conn, [EQUITY, INDEX])
+    ]
+    assert len(stats) == 2
+    assert all(mf.history_grade(s.years) == mf.TOO_NEW for s in stats)
+    keep, dropped = mf.eligible(stats, mf.RISK_BANDS["high"])
+    assert keep == []
+    assert len(dropped) == 2
+
+
+def test_the_whole_decision_pipeline_runs_on_a_series_read_back_from_the_database(conn, tmp_path):
+    load_fake(conn, tmp_path, days=2_600)  # a bit over seven years
+    details = mf_fetch.scheme_details(conn)
+    stats = [
+        mf.fund_stats(code, details[code].scheme_name, details[code].category, rows)
+        for code, rows in mf_fetch.iter_series(conn, [EQUITY, INDEX])
+    ]
+    keep, _dropped = mf.eligible(stats, mf.RISK_BANDS["high"])
+    assert {s.scheme_code for s in keep} == {EQUITY, INDEX}
+    assert all(s.grade == mf.RANKED for s in keep)
+
+    ranked = mf.rank_lumpsum(keep)
+    assert len(ranked) == 2
+    # The same funds, handed over in the other order, rank the same way.
+    assert [r.stats.scheme_code for r in ranked] == [
+        r.stats.scheme_code for r in mf.rank_lumpsum(list(reversed(keep)))
+    ]
+
+    # Both fake funds belong to one house, so the AMC rule is what limits the plan to one.
+    amcs = {code: info.amc for code, info in details.items()}
+    assert len(mf.diversify(ranked, 2, amcs)) == 1
+    picked = mf.diversify(ranked, 2, {})
+    assert len(picked) == 2
+
+    plan = mf.split_sip(picked, 10_000)
+    assert sum(s.monthly for s in plan.slices) == 10_000
+
+    series = {code: mf.Series.build(rows) for code, rows in mf_fetch.iter_series(conn)}
+    outcome = mf.sip_windows([(s.monthly, series[s.scheme_code]) for s in plan.slices], 5)
+    assert outcome.windows > 12
+    assert outcome.invested == 600_000  # 10,000 a month for sixty months
+    assert outcome.multiple.worst is not None and outcome.multiple.worst > 0
+    assert outcome.annualised.count == outcome.windows
+
+
+def test_keep_or_exit_finds_the_fall_that_was_written_into_the_fake_nav(conn, tmp_path):
+    load_fake(conn, tmp_path, days=2_600)
+    series = mf.Series.build(dict(mf_fetch.iter_series(conn, [EQUITY]))[EQUITY])
+    episodes = mf.fall_episodes(series, 0.20)
+
+    assert len(episodes) == 1  # one long slide counts once, not once a day
+    (episode,) = episodes
+    # The written-in cut is 30%, but the underlying trend keeps rising through it, so the
+    # fall measured from the peak is 27.1%. That gap is the point: the depth is read off the
+    # NAV, not off the number that generated it.
+    assert episode.depth == pytest.approx(0.271, abs=0.005)
+    assert episode.recovered_on is not None
+
+    evidence = mf.recovery_evidence(episodes, 0.20, horizon_days=365 * 3)
+    assert evidence.recovered == 1
+    assert evidence.still_down == 0
+    assert evidence.within_horizon + evidence.beyond_horizon == 1

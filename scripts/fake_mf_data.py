@@ -22,7 +22,7 @@ EQUITY = 9100001
 INDEX = 9100002
 DEBT = 9100003  # outside the universe: its NAV must never be stored
 START = date(2019, 1, 1)
-DAYS = 1500  # a bit over four years, so rolling 1-year and 3-year windows exist
+DAYS = 2600  # a bit over seven years: past the five-year rule S6b needs to rank at all
 
 MASTER_HEADER = (
     "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;"
