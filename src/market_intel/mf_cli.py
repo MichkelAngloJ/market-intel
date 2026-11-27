@@ -454,8 +454,12 @@ def run_keep_or_exit(settings, args: argparse.Namespace) -> int:
     print("\n".join(evidence_lines(own)))
 
     if not args.no_category:
-        print(f"\nAcross the {stats.category} funds with at least {mf.MIN_RANK_YEARS:g} years:")
-        pooled = category_evidence(settings, stats.category, level, horizon_days)
+        plan = house.plan if house is not None and house.plan != "unknown" else None
+        print(
+            f"\nAcross the {stats.category} funds with at least {mf.MIN_RANK_YEARS:g} years"
+            + (f", {plan} plans only:" if plan else ":")
+        )
+        pooled = category_evidence(settings, stats.category, level, horizon_days, plan)
         print("\n".join(evidence_lines(pooled)))
 
     print("\nKeep or exit - the trade-offs, not a recommendation:")
@@ -488,13 +492,20 @@ def evidence_lines(ev: mf.RecoveryEvidence) -> list[str]:
 
 
 def category_evidence(
-    settings, category: str, level: float, horizon_days: int
+    settings, category: str, level: float, horizon_days: int, plan: str | None = None
 ) -> mf.RecoveryEvidence:
-    """The same falls, pooled across every fund in the category with enough history."""
+    """The same falls, pooled across every fund in the category with enough history.
+
+    One plan only, when the held fund has one: a fund's Direct and Regular codes are nearly
+    the same series, and counting both would weigh that one fund twice in the pool.
+    """
     episodes: list[mf.Episode] = []
     funds = 0
     with postgres.connect(settings.require("database")) as conn:
-        for _code, rows in mf_fetch.iter_series(conn, None, category=category):
+        codes = None
+        if plan:
+            codes = sorted(mf_fetch.scheme_details(conn, category=category, plan=plan))
+        for _code, rows in mf_fetch.iter_series(conn, codes, category=category):
             series = mf.Series.build(rows)
             if series.years() < mf.MIN_RANK_YEARS:
                 continue
