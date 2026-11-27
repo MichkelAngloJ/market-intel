@@ -20,9 +20,8 @@ Last updated: 2026-11-27, HEAD 17f4d2d. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S6b (mutual fund decisions: lumpsum, SIP and keep-or-exit) done, awaiting planner
-  review. S6a review PASSED (planner, 2026-11-27). The mutual-fund priority is complete:
-  S6a is the data and the evidence, S6b the decisions. 0.11 (remove the testing-laptop
+- Now: S6c (honest lumpsum ranking: common period, survived-a-fall flag, independent
+  windows) in progress. S6a and S6b reviews both PASSED (planner, 2026-11-27). 0.11 (remove the testing-laptop
   dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -48,6 +47,12 @@ Last updated: 2026-11-27, HEAD 17f4d2d. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- S6b review (planner, 2026-11-27): passed. Verified at HEAD f0afce5: CI green at the tip,
+  compose-smoke green at 17f4d2d (the two commits after it are docs only); no NAV data or
+  results tracked; no old test weakened (65 new tests). Three Direct/Regular duplication bugs
+  were found and fixed inside the task. Finding to act on, which becomes S6c: the ranking still
+  judges each fund on its OWN history, so a 2020-vintage fund that never saw a crash can top
+  the table on a flattering worst case.
 - S6a review (planner, 2026-11-27): passed. Verified: CI and compose-smoke green at d35852c;
   migration 0011 present; no NAV data, scheme lists or results tracked; no old test weakened
   (46 new tests). Four bugs were found and fixed inside the task: three from this project's
