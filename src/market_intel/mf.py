@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 DISCLAIMER = (
     "Past performance is not indicative of future results; information, not investment advice."
@@ -455,50 +455,108 @@ class FallAndRecovery:
         return self.recovered / self.episodes if self.episodes else None
 
 
-def fall_and_recovery(series: Series, level: float) -> FallAndRecovery:
-    """Episodes where the NAV fell at least ``level`` from a running peak.
+@dataclass(frozen=True, slots=True)
+class Episode:
+    """One fall of at least a given size from a peak, and what happened after it.
 
-    An episode opens the first day the fall reaches ``level``, and closes when the NAV gets
-    back to that peak. A new episode cannot start until the previous one has closed, so a
-    long slide counts once rather than once a day.
+    ``depth`` is the deepest the fall got, as a fraction below ``peak_nav``. ``recovered_on``
+    is the day the NAV got back to that SAME peak, or None while it is still under water.
+    """
+
+    peak_date: date
+    peak_nav: float
+    reached_on: date  # the day the fall first reached the level
+    depth: float
+    recovered_on: date | None
+
+    @property
+    def days(self) -> int | None:
+        """Peak to that peak again. None while the fall has not been recovered."""
+        if self.recovered_on is None:
+            return None
+        return (self.recovered_on - self.peak_date).days
+
+
+def fall_episodes(series: Series, level: float) -> list[Episode]:
+    """Every fall of at least ``level`` from a running peak, in order.
+
+    An episode opens the first day the fall reaches ``level`` and closes when the NAV gets
+    back to that peak. A new episode cannot start until the previous one has closed, so one
+    long slide counts once rather than once a day. At most one episode can be open, so at
+    most one can still be under water, and that one is always the last.
     """
     if len(series) < 2 or not 0 < level < 1:
-        return FallAndRecovery(level, 0, 0, Distribution.of([]), 0)
-    peak = series.navs[0]
-    peak_date = series.dates[0]
-    open_peak: float | None = None
-    open_peak_date: date | None = None
-    depth_in_episode = 0.0
-    episodes = recovered = still_down = 0
-    days: list[float] = []
-    depths: list[float] = []
+        return []
+    peak, peak_date = series.navs[0], series.dates[0]
+    # (peak date, peak NAV, the day the fall reached the level) while an episode is open.
+    open_ep: tuple[date, float, date] | None = None
+    depth = 0.0
+    out: list[Episode] = []
     for i in range(1, len(series)):
         nav, d = series.navs[i], series.dates[i]
-        if open_peak is None:
+        if open_ep is None:
             if nav > peak:
                 peak, peak_date = nav, d
             elif 1.0 - nav / peak >= level:
-                open_peak, open_peak_date = peak, peak_date
-                depth_in_episode = 1.0 - nav / peak
-                episodes += 1
+                open_ep = (peak_date, peak, d)
+                depth = 1.0 - nav / peak
         else:
-            depth_in_episode = max(depth_in_episode, 1.0 - nav / open_peak)
-            if nav >= open_peak:
-                recovered += 1
-                days.append(float((d - open_peak_date).days))  # type: ignore[operator]
-                depths.append(depth_in_episode)
+            depth = max(depth, 1.0 - nav / open_ep[1])
+            if nav >= open_ep[1]:
+                out.append(Episode(open_ep[0], open_ep[1], open_ep[2], depth, d))
                 peak, peak_date = nav, d
-                open_peak = open_peak_date = None
-    if open_peak is not None:
-        still_down = 1
-        depths.append(depth_in_episode)
+                open_ep = None
+    if open_ep is not None:
+        out.append(Episode(open_ep[0], open_ep[1], open_ep[2], depth, None))
+    return out
+
+
+def fall_and_recovery(series: Series, level: float) -> FallAndRecovery:
+    """The episodes of :func:`fall_episodes` counted up: how many, how many came back, and
+    the spread of how long that took. The ones still under water are counted separately and
+    never averaged into the recovery times."""
+    episodes = fall_episodes(series, level)
+    days = [float(e.days) for e in episodes if e.days is not None]
     return FallAndRecovery(
         level=level,
-        episodes=episodes,
-        recovered=recovered,
+        episodes=len(episodes),
+        recovered=len(days),
         days=Distribution.of(days),
-        still_down=still_down,
-        worst_depth=max(depths) if depths else None,
+        still_down=sum(1 for e in episodes if e.recovered_on is None),
+        worst_depth=max((e.depth for e in episodes), default=None),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PeakDistance:
+    """Where the latest NAV sits against the highest NAV the fund ever had.
+
+    A fact, not a verdict: being below a peak is not a reason to buy ("it is cheap") or to
+    sell ("it is falling"). It is here because a ranking built on a long history says nothing
+    about where a fund stands today, and the owner should see both.
+    """
+
+    below: float  # 0.08 = the latest NAV is 8% under the highest NAV in the history held
+    peak_date: date | None = None
+    peak_nav: float | None = None
+    latest_nav: float | None = None
+
+
+def distance_below_peak(series: Series) -> PeakDistance:
+    """How far under its own highest NAV a fund is now. Ties take the EARLIEST peak."""
+    if not len(series):
+        return PeakDistance(0.0)
+    best = 0
+    for i in range(1, len(series)):
+        if series.navs[i] > series.navs[best]:
+            best = i
+    peak_nav = series.navs[best]
+    latest = series.navs[-1]
+    return PeakDistance(
+        below=max(0.0, 1.0 - latest / peak_nav),
+        peak_date=series.dates[best],
+        peak_nav=peak_nav,
+        latest_nav=latest,
     )
 
 
@@ -518,6 +576,12 @@ class FundStats:
     max_drawdown: Drawdown
     rolling: dict[int, Distribution] = field(default_factory=dict)
     recovery: dict[float, FallAndRecovery] = field(default_factory=dict)
+    peak: PeakDistance | None = None
+
+    @property
+    def grade(self) -> str:
+        """How much history there is, which decides whether this fund can be ranked."""
+        return history_grade(self.years)
 
     @property
     def worst_1y(self) -> float | None:
@@ -556,6 +620,7 @@ def fund_stats(
         max_drawdown=max_drawdown(series),
         rolling={y: rolling_returns(series, y) for y in years},
         recovery={lv: fall_and_recovery(series, lv) for lv in levels},
+        peak=distance_below_peak(series),
     )
 
 
@@ -597,6 +662,529 @@ def rank_within_category(
             continue
         out[s.scheme_code] = percentile_rank(by_category[s.category], float(value))
     return out
+
+
+# --- how much history a fund has, before anything is ranked (S6b) -------------------------
+# 841 of the 2,255 funds in the universe have under three years of NAV. Two things go wrong
+# if they are ranked anyway: there is not enough history to tell a good fund from a lucky
+# one, and a fund that happened to launch into a rising market tops the table on nothing but
+# its start date. So the rule is explicit, shared by all three decision commands, and shown
+# on every output rather than applied quietly.
+MIN_RANK_YEARS = 5.0
+MIN_SHOW_YEARS = 3.0
+
+RANKED = "ranked"
+SHORT_HISTORY = "short history"
+TOO_NEW = "too new to judge"
+
+GRADE_NOTE = {
+    RANKED: f"at least {MIN_RANK_YEARS:g} years of NAV: ranked",
+    SHORT_HISTORY: (
+        f"{MIN_SHOW_YEARS:g} to {MIN_RANK_YEARS:g} years of NAV: shown with a flag, never "
+        "ranked against funds with a long history"
+    ),
+    TOO_NEW: (
+        f"under {MIN_SHOW_YEARS:g} years of NAV: too new to judge on its own history. "
+        "Judging it on anything else needs a model of funds LIKE it, which this project has "
+        "not built."
+    ),
+}
+
+
+def history_grade(years: float) -> str:
+    """Which of the three history groups a fund falls into. The minimum-history rule itself."""
+    if years >= MIN_RANK_YEARS:
+        return RANKED
+    if years >= MIN_SHOW_YEARS:
+        return SHORT_HISTORY
+    return TOO_NEW
+
+
+# --- risk comfort, measured rather than labelled ------------------------------------------
+@dataclass(frozen=True, slots=True)
+class RiskBand:
+    """How much movement the owner is willing to live with.
+
+    The ceilings are a CHOICE made here, not an industry standard, and they are written down
+    so that "low risk" means the same thing every time it is printed. A fund is inside or
+    outside a band because of what its own NAV did, never because of its name or its label.
+    """
+
+    name: str
+    max_volatility: float | None
+    max_fall: float | None
+
+    def outside(self, stats: FundStats) -> tuple[str, ...]:
+        """Why this fund sits outside the band, or () when it sits inside."""
+        out: list[str] = []
+        if self.max_volatility is not None:
+            if stats.volatility is None:
+                out.append("its volatility cannot be measured")
+            elif stats.volatility > self.max_volatility:
+                out.append(
+                    f"volatility {stats.volatility:.0%} a year is over the "
+                    f"{self.max_volatility:.0%} this band allows"
+                )
+        if self.max_fall is not None and stats.max_drawdown.depth > self.max_fall:
+            out.append(
+                f"it has fallen {stats.max_drawdown.depth:.0%} below a peak, past the "
+                f"{self.max_fall:.0%} this band allows"
+            )
+        return tuple(out)
+
+
+RISK_BANDS: dict[str, RiskBand] = {
+    "low": RiskBand("low", 0.12, 0.25),
+    "medium": RiskBand("medium", 0.18, 0.40),
+    "high": RiskBand("high", None, None),
+}
+
+
+# --- the lumpsum ranking ------------------------------------------------------------------
+# Three measures, all computed from what the fund did and all "higher is better". None of
+# them is a forecast and none is a score of the fund's quality: together they say which funds
+# were paid best for the falls they put their holders through.
+LUMPSUM_MEASURES: tuple[str, ...] = ("return_per_fall", "median_5y", "worst_3y")
+
+MEASURE_NOTE = {
+    "return_per_fall": "return a year since the fund started, per unit of its deepest fall",
+    "median_5y": "the middle 5-year window: what a typical five years actually returned",
+    "worst_3y": "the WORST 3-year window: the bad case somebody really lived through",
+}
+
+
+def lumpsum_measures(stats: FundStats) -> dict[str, float | None]:
+    """The three ranking measures for one fund. A measure it cannot support is None."""
+    fall = stats.max_drawdown.depth
+    grew = stats.cagr_since_start
+    five, three = stats.rolling.get(5), stats.rolling.get(3)
+    return {
+        # A fund that has never fallen gets no ratio here rather than an infinite one. With
+        # five years of real NAV that does not happen; a synthetic series can.
+        "return_per_fall": None if grew is None or fall <= 0 else grew / fall,
+        "median_5y": five.median if five is not None and five.count else None,
+        "worst_3y": three.worst if three is not None and three.count else None,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class Ranked:
+    stats: FundStats
+    score: float  # 0..1, the mean of the percentiles below
+    percentiles: dict[str, float]
+    measures: dict[str, float | None]
+
+
+def rank_lumpsum(stats: Sequence[FundStats]) -> list[Ranked]:
+    """Rank funds on all three measures at once, each turned into a percentile first.
+
+    The measures are in different units - a ratio and two annual returns - so averaging them
+    raw would hand the ordering to whichever one happens to have the widest spread. Each is
+    converted to its percentile within this pool first, and the score is the mean of those.
+
+    Deterministic: ties share a percentile and the final sort breaks ties on the scheme code,
+    so the ordering depends only on the numbers, never on the order the funds arrived in.
+    """
+    measured = [(s, lumpsum_measures(s)) for s in stats]
+    pools: dict[str, list[float]] = {}
+    for name in LUMPSUM_MEASURES:
+        values = [m[name] for _s, m in measured]
+        pools[name] = sorted(v for v in values if v is not None)
+    out: list[Ranked] = []
+    for s, m in measured:
+        percentiles: dict[str, float] = {}
+        for name in LUMPSUM_MEASURES:
+            value = m[name]
+            if value is not None and pools[name]:
+                percentiles[name] = percentile_rank(pools[name], value)
+        score = sum(percentiles.values()) / len(percentiles) if percentiles else 0.0
+        out.append(Ranked(stats=s, score=score, percentiles=percentiles, measures=m))
+    out.sort(key=lambda r: (-r.score, r.stats.scheme_code))
+    return out
+
+
+def eligible(
+    stats: Sequence[FundStats], band: RiskBand
+) -> tuple[list[FundStats], list[tuple[FundStats, tuple[str, ...]]]]:
+    """Split funds into the ones that can be ranked in this band and the ones that cannot.
+
+    Two gates, in this order: enough history (the minimum-history rule), then the risk band.
+    The second list carries the reason for every fund left out, so nothing disappears without
+    the report being able to say why.
+    """
+    keep: list[FundStats] = []
+    dropped: list[tuple[FundStats, tuple[str, ...]]] = []
+    for s in stats:
+        grade = history_grade(s.years)
+        if grade != RANKED:
+            dropped.append((s, (f"{grade} ({s.years:.1f} years of NAV)",)))
+            continue
+        why = band.outside(s)
+        if why:
+            dropped.append((s, why))
+        else:
+            keep.append(s)
+    return keep, dropped
+
+
+# --- the SIP plan -------------------------------------------------------------------------
+# AMFI's files carry NAV, not terms: the minimum SIP instalment is NOT in them. It is an
+# input with a documented default, and the report says so, because a plan that quietly
+# assumes a minimum is a plan the owner cannot act on.
+DEFAULT_MIN_SIP = 500.0
+SIP_STEP = 100.0
+MIN_SIP_NOTE = (
+    "AMFI's NAV files do not carry each scheme's minimum SIP, so it is an input: the default "
+    f"of {DEFAULT_MIN_SIP:,.0f} a month is the common industry minimum, not this scheme's. "
+    "Check the scheme information document before starting a SIP."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SipSlice:
+    scheme_code: int
+    scheme_name: str
+    category: str
+    monthly: float
+    minimum: float
+
+
+@dataclass(frozen=True, slots=True)
+class SipPlan:
+    slices: tuple[SipSlice, ...]
+    monthly: float
+    notes: tuple[str, ...] = ()
+
+
+def diversify(
+    ranked: Sequence[Ranked], count: int, amcs: Mapping[int, str] | None = None
+) -> list[Ranked]:
+    """The best-ranked funds, but not several of the same kind.
+
+    At most one fund per AMC, because one fund house having a bad decade should not take the
+    whole plan with it, and every category is used once before any category gets a second
+    fund. ``ranked`` is already sorted, so the choice is deterministic.
+    """
+    picked: list[Ranked] = []
+    chosen: set[int] = set()
+    used_amc: set[str] = set()
+    used_category: set[str] = set()
+    houses = amcs or {}
+    for spread_first in (True, False):
+        for r in ranked:
+            if len(picked) >= count:
+                break
+            if r.stats.scheme_code in chosen:
+                continue
+            amc = houses.get(r.stats.scheme_code, "")
+            if amc and amc in used_amc:
+                continue
+            if spread_first and r.stats.category in used_category:
+                continue
+            picked.append(r)
+            chosen.add(r.stats.scheme_code)
+            used_category.add(r.stats.category)
+            if amc:
+                used_amc.add(amc)
+    return picked
+
+
+def split_sip(
+    picked: Sequence[Ranked],
+    amount: float,
+    *,
+    minimums: Mapping[int, float] | None = None,
+    step: float = SIP_STEP,
+) -> SipPlan:
+    """Split a monthly amount across the chosen funds, respecting each one's minimum.
+
+    An equal share rounded down to a whole ``step``, with whatever is left over going to the
+    top-ranked fund so the instalments add up to exactly what the owner said. If the share
+    does not clear some fund's minimum, the plan holds one fund fewer and says so: spreading
+    an amount so thin that the AMC would reject the mandate is not a plan.
+    """
+    floors = dict(minimums or {})
+    notes: list[str] = []
+    chosen = list(picked)
+    share = 0.0
+    while chosen:
+        share = math.floor(amount / len(chosen) / step) * step
+        if all(share >= floors.get(r.stats.scheme_code, DEFAULT_MIN_SIP) for r in chosen):
+            break
+        notes.append(
+            f"{amount:,.0f} a month does not clear every minimum across {len(chosen)} funds, "
+            f"so the plan holds {len(chosen) - 1}."
+        )
+        chosen.pop()
+    if not chosen:
+        return SipPlan(
+            (),
+            amount,
+            (f"{amount:,.0f} a month is below the minimum of every eligible fund.",),
+        )
+    remainder = amount - share * len(chosen)
+    slices = tuple(
+        SipSlice(
+            scheme_code=r.stats.scheme_code,
+            scheme_name=r.stats.scheme_name,
+            category=r.stats.category,
+            monthly=share + (remainder if i == 0 else 0.0),
+            minimum=floors.get(r.stats.scheme_code, DEFAULT_MIN_SIP),
+        )
+        for i, r in enumerate(chosen)
+    )
+    return SipPlan(slices, amount, tuple(notes))
+
+
+def xirr(
+    flows: Sequence[tuple[date, float]], *, lo: float = -0.95, hi: float = 10.0
+) -> float | None:
+    """The annual rate that makes a set of dated cash flows add up to nothing (bisection).
+
+    Money going out is negative, money coming back positive. This is what a SIP ACTUALLY
+    earned over a window that has already happened; it says nothing about the next one.
+    """
+    if len(flows) < 2:
+        return None
+    base = flows[0][0]
+
+    def npv(rate: float) -> float:
+        return sum(amount / (1.0 + rate) ** ((when - base).days / 365.25) for when, amount in flows)
+
+    low, high = lo, hi
+    f_low, f_high = npv(low), npv(high)
+    if f_low * f_high > 0:  # no sign change: no rate in this range makes the flows balance
+        return None
+    for _ in range(100):
+        mid = (low + high) / 2
+        f_mid = npv(mid)
+        if f_low * f_mid <= 0:
+            high, f_high = mid, f_mid
+        else:
+            low, f_low = mid, f_mid
+    return (low + high) / 2
+
+
+def month_starts(first: date, last: date, day: int = 1) -> list[date]:
+    """The same day of each month from ``first`` to ``last``, inclusive.
+
+    A month too short for the day (the 31st of February) uses its 28th, which is what a
+    mandate does in practice.
+    """
+    out: list[date] = []
+    year, month = first.year, first.month
+    while True:
+        try:
+            when = date(year, month, day)
+        except ValueError:
+            when = date(year, month, 28)
+        if when > last:
+            return out
+        if when >= first:
+            out.append(when)
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def nav_on_or_before(series: Series, when: date) -> float | None:
+    """The NAV an instalment made on ``when`` would have been bought at."""
+    i = _index_on_or_before(series.dates, when)
+    return None if i is None else series.navs[i]
+
+
+@dataclass(frozen=True, slots=True)
+class SipOutcome:
+    """What a SIP like this one came to, over every window the history allows.
+
+    A spread, never a single number: the same plan started three months apart ended very
+    differently, and that difference is the honest answer to "how sure is this?".
+    """
+
+    windows: int
+    invested: float
+    value: Distribution
+    multiple: Distribution
+    annualised: Distribution
+    first_start: date | None = None
+    last_start: date | None = None
+
+
+def sip_run(
+    plan: Sequence[tuple[float, Series]], start: date, years: int
+) -> tuple[float, float, float | None] | None:
+    """One SIP: invest the same amounts every month for ``years``, then value what is held.
+
+    Returns (invested, final value, annualised rate), or None when any fund is missing NAV
+    for any part of the window. A window only some of the funds covered would flatter the
+    plan, so it is dropped rather than patched.
+    """
+    end = _add_years(start, years)
+    for _monthly, series in plan:
+        if series.start is None or series.end is None:
+            return None
+        if series.start > start or series.end < end:
+            return None
+    units = [0.0] * len(plan)
+    per_month = sum(monthly for monthly, _s in plan)
+    flows: list[tuple[date, float]] = []
+    invested = 0.0
+    for when in month_starts(start, end - timedelta(days=1), start.day):
+        for k, (monthly, series) in enumerate(plan):
+            nav = nav_on_or_before(series, when)
+            if nav is None:
+                return None
+            units[k] += monthly / nav
+        invested += per_month
+        flows.append((when, -per_month))
+    if not flows:
+        return None
+    value = 0.0
+    for k, (_monthly, series) in enumerate(plan):
+        nav = nav_on_or_before(series, end)
+        if nav is None:
+            return None
+        value += units[k] * nav
+    flows.append((end, value))
+    return invested, value, xirr(flows)
+
+
+def sip_windows(plan: Sequence[tuple[float, Series]], years: int) -> SipOutcome:
+    """Run the same SIP from the same day of every month the history can support."""
+    empty = Distribution.of([])
+    if not plan or years <= 0:
+        return SipOutcome(0, 0.0, empty, empty, empty)
+    starts = [s.start for _m, s in plan if s.start is not None]
+    ends = [s.end for _m, s in plan if s.end is not None]
+    if len(starts) != len(plan) or len(ends) != len(plan):
+        return SipOutcome(0, 0.0, empty, empty, empty)
+    values: list[float] = []
+    multiples: list[float] = []
+    rates: list[float] = []
+    used: list[date] = []
+    invested = 0.0
+    for when in month_starts(max(starts), _add_years(min(ends), -years)):
+        run = sip_run(plan, when, years)
+        if run is None:
+            continue
+        invested, value, rate = run
+        values.append(value)
+        multiples.append(value / invested if invested > 0 else 0.0)
+        if rate is not None:
+            rates.append(rate)
+        used.append(when)
+    return SipOutcome(
+        windows=len(used),
+        invested=invested,
+        value=Distribution.of(values),
+        multiple=Distribution.of(multiples),
+        annualised=Distribution.of(rates),
+        first_start=used[0] if used else None,
+        last_start=used[-1] if used else None,
+    )
+
+
+def stop_rule_lines(*, years: int, goal: float | None, review_months: int = 6) -> list[str]:
+    """The plain rule for when the SIP ends. Decided up front, not in the middle of a fall."""
+    out = [
+        "STOP the SIP when ANY of these is true - decide it now, not during a fall:",
+        f"  1. the horizon ends: {years} years from the first instalment.",
+        (
+            f"  2. the goal is reached: the holding is worth {goal:,.0f} or more."
+            if goal is not None
+            else "  2. the goal is reached (pass --goal to put a number here)."
+        ),
+        f"  3. a fund falls out of the better half of its category (percentile under 50 on "
+        f"`mf lumpsum`) at {review_months} monthly reviews in a row. Stop THAT fund's "
+        "instalment and move it to the next eligible fund, not the whole plan.",
+        "A fall in the market is NOT on this list. The windows above already include the "
+        "falls; stopping inside one is what turns a bad window into a realised loss.",
+    ]
+    return out
+
+
+# --- keep or exit -------------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class Position:
+    """What the owner put in and what it is worth now. Their numbers, not the fund's."""
+
+    invested: float
+    current: float
+
+    @property
+    def change(self) -> float | None:
+        """-0.18 = the holding is 18% below what was put into it."""
+        return None if self.invested <= 0 else self.current / self.invested - 1.0
+
+    @property
+    def gain_needed(self) -> float | None:
+        """How far it has to rise from here to be worth what was put in."""
+        return None if self.current <= 0 else self.invested / self.current - 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryEvidence:
+    """What happened after falls at least this deep. History; not a promise about this one."""
+
+    level: float
+    funds: int
+    episodes: int
+    recovered: int
+    still_down: int
+    days: Distribution
+    within_horizon: int
+    beyond_horizon: int
+    horizon_days: int | None = None
+
+    @property
+    def recovery_rate(self) -> float | None:
+        return self.recovered / self.episodes if self.episodes else None
+
+
+def recovery_evidence(
+    episodes: Sequence[Episode], level: float, *, horizon_days: int | None, funds: int = 1
+) -> RecoveryEvidence:
+    """Count falls of this depth, and split the recoveries by the owner's remaining horizon.
+
+    The episodes still under water are counted on their own and never averaged into the
+    recovery times, because leaving them out is exactly how a recovery number flatters
+    itself.
+    """
+    days = [float(e.days) for e in episodes if e.days is not None]
+    within = sum(1 for d in days if horizon_days is not None and d <= horizon_days)
+    return RecoveryEvidence(
+        level=level,
+        funds=funds,
+        episodes=len(episodes),
+        recovered=len(days),
+        still_down=sum(1 for e in episodes if e.recovered_on is None),
+        days=Distribution.of(days),
+        within_horizon=within if horizon_days is not None else 0,
+        beyond_horizon=(len(days) - within) if horizon_days is not None else 0,
+        horizon_days=horizon_days,
+    )
+
+
+def match_level(fall_from_peak: float, position_change: float | None) -> float | None:
+    """Which depth of past fall is comparable to where this holding stands now.
+
+    The deeper of the fund's own fall from its peak and the owner's loss: the first is what
+    the episode statistics measure, the second is what the owner is actually living with.
+    Under 5% there is nothing distinctive to match, and the answer is None.
+    """
+    loss = -position_change if position_change is not None and position_change < 0 else 0.0
+    level = max(fall_from_peak, loss)
+    return round(level, 4) if 0.05 <= level < 1.0 else None
+
+
+KEEP_OR_EXIT_TRADE_OFFS = (
+    "Keeping means the money stays exposed to this same fund. The recovery times above are a "
+    "SPREAD of what happened before, not a schedule, and some past falls had still not been "
+    "recovered when the history ended.",
+    "Exiting means the loss stops being on paper and becomes final, and any past fall that "
+    "did come back would have been missed. Exit load and capital-gains tax are real costs "
+    "and are NOT modelled here.",
+    "Neither column is a recommendation. Nothing here says this fund will recover; the "
+    "decision is the owner's.",
+)
 
 
 if __name__ == "__main__":  # pragma: no cover - `python -m market_intel.mf fetch|stats`

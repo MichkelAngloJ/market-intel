@@ -519,6 +519,37 @@ def _stream(
         yield current, rows
 
 
+@dataclass(frozen=True, slots=True)
+class SchemeInfo:
+    """What the decision commands need about a scheme besides its NAV."""
+
+    scheme_code: int
+    scheme_name: str
+    category: str
+    amc: str
+
+
+def scheme_details(
+    conn: Any, scheme_codes: Sequence[int] | None = None, *, category: str | None = None
+) -> dict[int, SchemeInfo]:
+    """The universe's names, categories and fund houses, for the S6b decision commands.
+
+    The AMC is what lets a SIP plan avoid putting the whole monthly amount into one fund
+    house; :func:`scheme_rows` predates it and is left alone.
+    """
+    sql = ["SELECT scheme_code, scheme_name, category, amc FROM mf_schemes WHERE in_universe"]
+    params: list[Any] = []
+    if scheme_codes:
+        sql.append("AND scheme_code = ANY(%s)")
+        params.append(list(scheme_codes))
+    if category:
+        sql.append("AND category = %s")
+        params.append(category)
+    with conn.cursor() as cur:
+        cur.execute(" ".join(sql), params)
+        return {row[0]: SchemeInfo(*row) for row in cur.fetchall()}
+
+
 def scheme_rows(conn: Any, scheme_codes: Sequence[int] | None = None) -> dict[int, tuple[str, str]]:
     sql = "SELECT scheme_code, scheme_name, category FROM mf_schemes WHERE in_universe"
     params: list[Any] = []
