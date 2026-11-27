@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-27, HEAD 05e51c0. Updated at the end of every task (see
+Last updated: 2026-11-27, HEAD 17f4d2d. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -194,7 +194,7 @@ Last updated: 2026-11-27, HEAD 05e51c0. Updated at the end of every task (see
 | S5i-b | done 2026-11-26 (HEAD 23dde7a) | passed (planner, 2026-11-26) | Labels v3 (ATR barriers held 30 / 60 bars or to the close) with the ATR invariant checked separately; `intraday precision` (probability deciles and the top 10/5/1% most-confident signals with their net result after costs); plain-percentage reporting against `no_trading`. BOTH questions answered NO: holding longer does not beat the fee, and no confidence band is profitable |
 | S5i-c | done 2026-11-26 (HEAD 6874630) | awaiting planner review | `movers100` (107 liquid, volatile NSE stocks incl. the owner's 7 picks) chosen from the daily candles; 47.8M 1-minute rows; features and labels v2; isotonic calibration fitted from EARLIER months only; a probability cache. Rules still have NO gross edge; the model's EV gate pays over the walk-forward but decays to negative by 2026 |
 | S6a | done 2026-11-27 (HEAD d35852c) | awaiting planner review | Mutual funds, the data and evidence half. Official AMFI NAV (NAVAll.txt and the 90-day history report, both verified live and parsed by their own header because their column orders differ); migration 0011 (mf_schemes, mf_nav, mf_nav_chunks); a resumable, polite backfill; and a per-fund stats engine (rolling returns, CAGR, volatility, drawdown, fall-and-recovery distributions, category percentiles) with a disclaimer and a survivorship note on every output |
-| S6b | done 2026-11-27 (HEAD 05e51c0) | awaiting planner review | Mutual funds, the decision half, offline and storing nothing. `mf lumpsum` (a ranking on three historical measures at once, inside a measured risk band), `mf sip` (a split across fund houses with each scheme's minimum, and the best/median/worst of that exact plan over every rolling window, with a plain stop rule) and `mf keep-or-exit` (what this fund and its whole category did after falls of the same depth, against the owner's horizon). The minimum-history rule - rank at 5 years, flag 3 to 5, refuse under 3 - is shared by all three and printed on every output. No migration |
+| S6b | done 2026-11-27 (HEAD 17f4d2d) | awaiting planner review | Mutual funds, the decision half, offline and storing nothing. `mf lumpsum` (a ranking on three historical measures at once, inside a measured risk band), `mf sip` (a split across fund houses with each scheme's minimum, and the best/median/worst of that exact plan over every rolling window, with a plain stop rule) and `mf keep-or-exit` (what this fund and its whole category did after falls of the same depth, against the owner's horizon). The minimum-history rule - rank at 5 years, flag 3 to 5, refuse under 3 - is shared by all three and printed on every output. No migration |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -408,8 +408,10 @@ Last updated: 2026-11-27, HEAD 05e51c0. Updated at the end of every task (see
   by only 0.05 bps here, but the next model it is used on may not be so forgiving.
 - An AMFI scheme code is a plan AND an option, so every fund is in the universe twice,
   Direct and Regular, with nearly the same NAV. `mf lumpsum` and `mf sip` therefore rank ONE
-  plan at a time and default to Direct; anything else built on this universe has to make the
-  same choice or it will count the same fund twice.
+  plan at a time and default to Direct, and `mf keep-or-exit` pools its category evidence over
+  the held fund's own plan. Anything else built on this universe has to make the same choice
+  or it will count the same fund twice: pooling both plans turned 304 equity funds into 612
+  and moved the median wait after a 28% fall from 312 days to 453.
 - Five years of history is not the SAME five years. 2020 was the bottom of a crash, so a fund
   whose NAV begins in mid-2020 has a flattering worst-case and can top a ranking without ever
   having been through a fall. The minimum-history rule cannot catch this; `mf lumpsum` prints
