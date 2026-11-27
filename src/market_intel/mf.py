@@ -21,8 +21,9 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
+from typing import Any
 
 DISCLAIMER = (
     "Past performance is not indicative of future results; information, not investment advice."
@@ -1248,6 +1249,12 @@ class CommonWindow:
     stale: int = 0
     too_short: int = 0
     asked_years: int | None = None
+    # The decline the window was anchored on, when it was anchored on one at all.
+    fall: Episode | None = None
+    # Set when a fall was wanted and could not be had. It is printed loudly, because a
+    # ranking over a market that only rose is a different thing from one that includes a
+    # decline, and the difference must never be silent.
+    no_fall_reason: str | None = None
 
     @property
     def years(self) -> float:
@@ -1259,52 +1266,124 @@ class CommonWindow:
     def ok(self) -> bool:
         return self.start is not None and self.end is not None and self.funds > 0
 
+    def holds(self, fall: Episode) -> bool:
+        """Whether this window covers a decline from its peak to its bottom."""
+        if self.start is None or self.end is None:
+            return False
+        bottom = fall.trough_date or fall.reached_on
+        return self.start <= fall.peak_date and self.end >= bottom
+
+
+def eligible_spans(
+    spans: Sequence[Span], stale_days: int, min_years: float
+) -> tuple[list[Span], int]:
+    """The funds a window may be built from: still reporting, and old enough to be ranked."""
+    if not spans:
+        return [], 0
+    newest = max(s.last for s in spans)
+    fresh = [s for s in spans if (newest - s.last).days <= stale_days]
+    return [s for s in fresh if s.years >= min_years], len(spans) - len(fresh)
+
+
+def _window_over(
+    candidates: Sequence[Span], eligible: Sequence[Span], stale: int, **extra: Any
+) -> tuple[CommonWindow, list[int]]:
+    """Build the window every one of ``candidates`` covers, and say who was left out."""
+    if not candidates:
+        return CommonWindow(None, None, stale=stale, too_short=len(eligible), **extra), []
+    start = max(s.first for s in candidates)
+    end = min(s.last for s in candidates)
+    if start >= end:
+        return CommonWindow(None, None, stale=stale, too_short=len(eligible), **extra), []
+    return (
+        CommonWindow(
+            start=start,
+            end=end,
+            funds=len(candidates),
+            stale=stale,
+            too_short=len(eligible) - len(candidates),
+            **extra,
+        ),
+        sorted(s.scheme_code for s in candidates),
+    )
+
 
 def common_window(
     spans: Sequence[Span],
     *,
     years: int | None = None,
+    falls: Sequence[Episode] = (),
+    require_fall: bool = True,
     stale_days: int = MAX_STALE_DAYS,
     min_years: float = MIN_RANK_YEARS,
 ) -> tuple[CommonWindow, list[int]]:
-    """The longest trailing window every eligible fund covers, and who covers it.
+    """Choose the one window the ranking is computed over, and say who covers it.
 
-    Eligibility here is the minimum-history rule ALONE, deliberately: the window is then the
-    same whatever risk band the owner asks for, so the ranking does not silently move because
-    a ceiling changed.
+    Eligibility is the minimum-history rule ALONE, deliberately: the window is then the same
+    whatever risk band the owner asks for, so the ranking does not silently move because a
+    ceiling changed. A fund that has stopped reporting is dropped first - one dead fund would
+    otherwise drag the window's end back by years and take every live fund's recent history
+    with it.
 
-    A fund that stopped reporting is dropped first. One dead fund would otherwise drag the
-    window's end back by years and take every live fund's recent history with it.
+    Three ways to choose it, in this order:
 
-    With ``years`` the window is instead the last ``years`` of market and only the funds that
-    cover it are ranked - the way to get a window that includes an actual crash.
+    ``years``
+        The last ``years`` of market, exactly as asked. Only funds covering all of it are
+        ranked. The result reports whether it happens to contain a fall; it is not required
+        to, because the owner named the period.
+
+    ``require_fall`` (the DEFAULT, S6d)
+        The window must contain a real decline, so the ranking reflects how funds behaved in
+        one rather than who climbed fastest in a rising market. The MOST RECENT decline in
+        ``falls`` is used - a fixed number of years would drift away from it as time passes -
+        and the window is then the longest one covered by every fund that was already
+        reporting at that decline's peak and still reporting at its bottom. Funds too young
+        for it are not ranked; they are the "untested in a downturn" ones, counted and named
+        on the report rather than quietly dropped.
+
+    neither
+        The longest trailing window every eligible fund covers, whatever market it holds.
+        This is what ``require_fall=False`` asks for, and what the two paths above fall back
+        to when there is no usable decline - with ``no_fall_reason`` set, so the report can
+        say loudly that the ranking is on a market that only rose.
     """
-    if not spans:
-        return CommonWindow(None, None), []
-    newest = max(s.last for s in spans)
-    fresh = [s for s in spans if (newest - s.last).days <= stale_days]
-    stale = len(spans) - len(fresh)
-    long_enough = [s for s in fresh if s.years >= min_years]
-    if not long_enough:
-        return CommonWindow(None, None, stale=stale), []
-    end = min(s.last for s in long_enough)
-    start = _add_years(end, -years) if years is not None else max(s.first for s in long_enough)
-    covered = [s for s in long_enough if s.first <= start]
-    if not covered or start >= end:
-        return CommonWindow(
-            None, None, stale=stale, too_short=len(long_enough), asked_years=years
-        ), []
-    return (
-        CommonWindow(
-            start=start,
-            end=end,
-            funds=len(covered),
-            stale=stale,
-            too_short=len(long_enough) - len(covered),
-            asked_years=years,
-        ),
-        sorted(s.scheme_code for s in covered),
-    )
+    eligible, stale = eligible_spans(spans, stale_days, min_years)
+    if not eligible:
+        return CommonWindow(None, None, stale=stale, asked_years=years), []
+
+    if years is not None:
+        end = min(s.last for s in eligible)
+        start = _add_years(end, -years)
+        covering = [s for s in eligible if s.first <= start]
+        window, codes = _window_over(covering, eligible, stale, asked_years=years)
+        if window.ok and window.start is not None:
+            # The named window is honoured whatever it holds; the report says which it is.
+            held = next((f for f in falls if window.holds(f)), None)
+            window = replace(window, fall=held, start=start)
+        return window, codes
+
+    if require_fall:
+        if not falls:
+            reason = (
+                f"no decline of {REFERENCE_FALL:.0%} or more exists anywhere in the market "
+                "reference, so no window could be anchored on one"
+            )
+        else:
+            latest = max(falls, key=lambda f: f.peak_date)
+            bottom = latest.trough_date or latest.reached_on
+            through = [s for s in eligible if s.first <= latest.peak_date and s.last >= bottom]
+            window, codes = _window_over(through, eligible, stale, fall=latest)
+            if window.ok:
+                return window, codes
+            reason = (
+                f"no fund with {min_years:g} years of NAV was reporting through the "
+                f"{latest.depth:.0%} fall of {latest.peak_date}, so no window could be "
+                "anchored on it"
+            )
+        window, codes = _window_over(eligible, eligible, stale, no_fall_reason=reason)
+        return window, codes
+
+    return _window_over(eligible, eligible, stale)
 
 
 def slice_series(series: Series, start: date, end: date) -> Series:

@@ -33,6 +33,10 @@ MIN_HONEST_WINDOWS = 12
 # same portfolio carrying a distributor's commission, so Direct is the default.
 PLANS = ("direct", "regular", "any")
 PLAN_HELP = "which plan to rank (default direct: the same fund without the commission)"
+CALM_HELP = (
+    "rank over the longest shared window even when it contains no fall (the default refuses "
+    "to, because a rising market says nothing about holding up in a decline)"
+)
 
 COMPONENT = "mf"
 log = get_logger("market_intel.mf")
@@ -247,6 +251,9 @@ class Measured:
     details: dict[int, mf_fetch.SchemeInfo]
     window: mf.CommonWindow
     seconds: float
+    # Funds with the five years that the window could not take: on the default path these are
+    # the ones that were not there for the fall. They are named on the report, never dropped.
+    untested: tuple[int, ...] = ()
 
     def flag(self, code: int) -> tuple[str, int]:
         """The survived-a-fall flag for one fund, and how many declines it lived through."""
@@ -288,6 +295,7 @@ def measure_everything(
     category: str | None = None,
     plan: str | None = None,
     common_years: int | None = None,
+    require_fall: bool = True,
 ) -> Measured:
     """Read every relevant series ONCE and get the full history, the window and the flag.
 
@@ -297,14 +305,23 @@ def measure_everything(
     """
     t0 = time.monotonic()
     reference, reference_funds = market_reference(settings)
+    # The decline calendar has to exist before the window is chosen, because by default the
+    # window is anchored on the most recent decline in it.
+    falls = mf.reference_falls(reference)
     unknown = mf_fetch.SchemeInfo(0, "?", "other", "?", "unknown")
     full: dict[int, mf.FundStats] = {}
     windowed: dict[int, mf.FundStats] = {}
     with postgres.connect(settings.require("database")) as conn:
         details = mf_fetch.scheme_details(conn, category=category, plan=plan)
         spans = mf_fetch.nav_spans(conn, category=category, plan=plan)
-        window, covering = mf.common_window(spans, years=common_years)
+        window, covering = mf.common_window(
+            spans, years=common_years, falls=falls, require_fall=require_fall
+        )
         wanted = set(covering)
+        eligible, _stale = mf.eligible_spans(spans, mf.MAX_STALE_DAYS, mf.MIN_RANK_YEARS)
+        untested = tuple(
+            sorted(span.scheme_code for span in eligible if span.scheme_code not in wanted)
+        )
         codes = sorted(details) if (plan or category) else None
         for code, rows in mf_fetch.iter_series(conn, codes, category=category):
             info = details.get(code, unknown)
@@ -322,32 +339,49 @@ def measure_everything(
     return Measured(
         full=full,
         windowed=windowed,
-        falls=mf.reference_falls(reference),
+        falls=falls,
         reference=reference,
         reference_funds=reference_funds,
         details=details,
         window=window,
         seconds=time.monotonic() - t0,
+        untested=untested,
     )
 
 
 def window_lines(window: mf.CommonWindow, measured: int) -> list[str]:
-    """What the shared window is, and who it cost."""
+    """What the shared window is, how it was chosen, and who it cost."""
     if not window.ok:
         asked = f"the last {window.asked_years} years" if window.asked_years else "any window"
         return [
             f"No shared window: no eligible fund covers {asked}. "
             f"{window.too_short} fund(s) have the five years but not that span."
         ]
-    how = (
-        f"the last {window.asked_years} years, as asked"
-        if window.asked_years
-        else "the longest stretch EVERY eligible fund covers"
-    )
+    if window.asked_years:
+        how = f"the last {window.asked_years} years, as asked"
+    elif window.fall is not None:
+        how = (
+            f"anchored on the {window.fall.depth:.0%} fall of {window.fall.peak_date} to "
+            f"{window.fall.trough_date}, so the ranking is over a market that really fell"
+        )
+    else:
+        how = "the longest stretch EVERY eligible fund covers, whatever market it holds"
     out = [
         f"Shared window: {window.start} to {window.end} ({window.years:.1f} years) - {how}.",
         f"  {window.funds:,} of the {measured:,} funds measured are ranked over it.",
     ]
+    if window.no_fall_reason:
+        out.append(
+            f"  !! NO FALL IN THE WINDOW: {window.no_fall_reason}. This ranking is over a "
+            "market that only rose, so it says who climbed fastest and NOTHING about who "
+            "holds up in a decline. Read it that way."
+        )
+    elif window.asked_years and window.fall is None:
+        out.append(
+            "  !! The window you asked for contains no decline of "
+            f"{mf.REFERENCE_FALL:.0%} or more, so it says who climbed fastest and nothing "
+            "about who holds up in a fall. The default window would have one."
+        )
     short = measured - window.funds - window.stale - window.too_short
     if short > 0:
         out.append(
@@ -361,10 +395,47 @@ def window_lines(window: mf.CommonWindow, measured: int) -> list[str]:
             "window's end backwards."
         )
     if window.too_short:
-        out.append(
-            f"  {window.too_short:,} fund(s) have five years of NAV but do not cover this "
-            "window, so they are not ranked here."
+        what = (
+            "were not reporting through that fall, so they are UNTESTED IN A DOWNTURN"
+            if window.fall is not None
+            else "do not cover this window"
         )
+        out.append(
+            f"  {window.too_short:,} fund(s) have {mf.MIN_RANK_YEARS:g} years of NAV but "
+            f"{what}: not ranked."
+        )
+    return out
+
+
+def untested_lines(got: Measured, show: int = 8) -> list[str]:
+    """Name the funds the window could not take, so none of them disappears quietly."""
+    if not got.untested:
+        return []
+    what = (
+        "were not there for that fall"
+        if got.window.fall is not None
+        else "do not cover the shared window"
+    )
+    out = [
+        "",
+        f"NOT RANKED - {len(got.untested):,} fund(s) have the "
+        f"{mf.MIN_RANK_YEARS:g} years but {what}:",
+    ]
+    rows = []
+    for code in got.untested:
+        stats = got.full.get(code)
+        if stats is not None:
+            rows.append((stats.start or date.max, code, stats.scheme_name))
+    rows.sort(reverse=True)  # youngest first: the ones furthest from being comparable
+    for first, code, name in rows[:show]:
+        out.append(f"  {mf.UNTESTED}: {name} [{code}], NAV from {first}")
+    if len(rows) > show:
+        out.append(f"  ...and {len(rows) - show:,} more.")
+    out.append(
+        "  Not a verdict on any of them: their record simply does not cover the same market, "
+        "so placing them beside the ranked funds would be a comparison the data cannot make. "
+        "`mf stats --scheme <code>` shows what each one's own history does say."
+    )
     return out
 
 
@@ -398,8 +469,8 @@ def reference_lines(got: Measured) -> list[str]:
     else:
         out.append(
             "    NONE of those fall inside the shared window, so the window itself contains "
-            "no real decline. Every fund is compared fairly, but on a market that only rose; "
-            "--common-years buys a longer window with a fall in it."
+            "no real decline. Every fund is compared fairly, but on a market that only "
+            "rose. The default window is anchored on a fall; this one was asked for."
         )
     return out
 
@@ -419,7 +490,11 @@ def run_lumpsum(settings, args: argparse.Namespace) -> int:
     band = mf.RISK_BANDS[args.risk]
     plan = None if args.plan == "any" else args.plan
     got = measure_everything(
-        settings, category=args.category, plan=plan, common_years=args.common_years
+        settings,
+        category=args.category,
+        plan=plan,
+        common_years=args.common_years,
+        require_fall=not args.allow_calm_window,
     )
     if not got.full:
         print("No NAV history held yet. Run `mf fetch`.", file=sys.stderr)
@@ -489,6 +564,8 @@ def run_lumpsum(settings, args: argparse.Namespace) -> int:
         print("\n".join(how_sure_lines(whole)))
         print()
 
+    print("\n".join(untested_lines(got)))
+
     own = mf.rank_lumpsum(keep)
     changed = [r.stats.scheme_code for r in own[:3]] != [r.stats.scheme_code for r in ranked[:3]]
     print(
@@ -526,6 +603,8 @@ def run_sip(settings, args: argparse.Namespace) -> int:
     # went: there is no ten-year window to look at. The horizon therefore sets the shared
     # window, and only funds covering the whole of it are candidates.
     need = int(math.ceil(max(mf.MIN_RANK_YEARS, float(args.years), args.min_history or 0.0)))
+    # The window is the horizon the owner asked for, so there is nothing to anchor: a
+    # plan has to be measured over the span it will actually run for.
     got = measure_everything(settings, category=args.category, plan=plan_filter, common_years=need)
     print(
         f"SIP  {rupees(args.amount)} a month for {args.years} years at {band.name} risk"
@@ -791,10 +870,9 @@ def build_parser() -> argparse.ArgumentParser:
     lump.add_argument(
         "--common-years",
         type=int,
-        help="rank over the last N years instead of the longest shared window, and "
-        "drop the funds that do not cover it (the way to get a window with a crash "
-        "in it)",
+        help="rank over the last N years instead, and drop the funds that do not cover it",
     )
+    lump.add_argument("--allow-calm-window", action="store_true", help=CALM_HELP)
 
     sip = sub.add_parser("sip", help="split a monthly amount and show what such a SIP did")
     sip.add_argument("--amount", type=float, required=True, help="a month, in rupees")
