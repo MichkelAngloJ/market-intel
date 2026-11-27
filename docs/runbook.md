@@ -594,6 +594,55 @@ many times the fund fell that far, how many of those falls got back to the same 
 are still under water, and the spread of how long the recoveries took. Every report ends with
 the survivorship note and the disclaimer; neither is decoration.
 
+### The three decision commands
+
+All three are OFFLINE: they read the NAV already stored and compute on demand. Nothing is
+written back, so they are safe to run as often as wanted.
+
+| Goal | Command |
+|---|---|
+| Which fund for a lumpsum, at a risk comfort | `uv run python -m market_intel.mf lumpsum --amount 500000 --risk medium` |
+| The same, narrowed to one category | `... lumpsum --amount 500000 --risk low --category hybrid --top 10` |
+| A monthly plan and what it came to before | `uv run python -m market_intel.mf sip --amount 25000 --years 7 --risk medium` |
+| The same, with a goal and more history | `... sip --amount 25000 --years 7 --risk medium --goal 3000000 --min-history 12` |
+| A scheme's own minimum SIP | `... sip --amount 5000 --years 5 --risk low --min-sip-for 118989=1000` |
+| A holding at a loss | `uv run python -m market_intel.mf keep-or-exit --fund 118989 --invested 200000 --current 152000` |
+| The same, valued from the NAV | `... keep-or-exit --fund 118989 --invested 200000 --buy-date 2024-09-20 --horizon-years 5` |
+
+`--plan` is `direct` by DEFAULT on `lumpsum` and `sip`. An AMFI scheme code is a plan AND an
+option, so one fund appears twice - Direct and Regular - and ranking both fills a table with
+the same fund. The Regular plan is the same portfolio carrying a distributor's commission.
+`--plan regular` or `--plan any` overrides it.
+
+`--risk` is `low`, `medium` or `high` and is REQUIRED for `lumpsum` and `sip`: it is the
+owner's comfort, not something to guess. It is two measured ceilings - volatility at most 12 /
+18 / no limit percent a year, and a deepest fall of at most 25 / 40 / no limit percent - so a
+fund is in or out because of what its NAV did.
+
+**The minimum-history rule** is printed on every one of these reports: five years or more is
+ranked, three to five years is flagged `short history` and never ranked, and under three years
+is `too new to judge`. A fund missing from a ranking is information, which is why the rule is
+on the page rather than in the code only.
+
+**`lumpsum` takes about a minute** over the whole universe, because it measures all 2,255
+funds before it ranks any. `--category` cuts that to the one group.
+
+**`sip` needs funds that cover the horizon.** A seven-year plan is only shown from funds with
+seven years of NAV, because a shorter history has no seven-year window to show. `--min-history`
+asks for more than that, which buys more windows and so a more meaningful spread; with only a
+handful of windows the report says so rather than pretending.
+
+**Reading `keep-or-exit`.** It matches the deeper of two numbers - how far the fund is below
+its own peak and how far the holding is below what was paid - against past falls of that depth
+in this fund AND across its category. Read the COUNTS first (how many came back, how many had
+not), then the spread of days, then the split against the horizon. The falls still under water
+are counted on their own and are never averaged into the days; leaving them out is exactly how
+a recovery number flatters itself. Exit load and capital-gains tax are real and are NOT in any
+of this.
+
+Nothing in any of the three is a prediction, a score, or a recommendation, and no result is
+stored.
+
 ## News feeds and source health
 
 How it works: [architecture](architecture.md#news-and-exchange-feeds) and

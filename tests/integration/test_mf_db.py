@@ -304,3 +304,15 @@ def test_keep_or_exit_finds_the_fall_that_was_written_into_the_fake_nav(conn, tm
     assert evidence.recovered == 1
     assert evidence.still_down == 0
     assert evidence.within_horizon + evidence.beyond_horizon == 1
+
+
+def test_only_one_plan_is_ranked_so_a_fund_cannot_fill_a_table_twice(conn, tmp_path):
+    master = tmp_path / "NAVAll.txt"
+    master.write_text(fake_master(), encoding="utf-8")
+    mf_fetch.store_schemes(conn, mf_fetch.read_schemes(master), seen=date(2024, 3, 1))
+
+    direct = mf_fetch.scheme_details(conn, [EQUITY, INDEX], plan="direct")
+    regular = mf_fetch.scheme_details(conn, [EQUITY, INDEX], plan="regular")
+    assert set(direct) == {EQUITY, INDEX}  # the fake master is Direct Plan throughout
+    assert regular == {}
+    assert direct[EQUITY].plan == "direct"

@@ -198,8 +198,13 @@ Decision 2026-11-22:
   download, and a per-fund statistics engine - rolling returns over 1/3/5/7/10 years, CAGR,
   volatility, worst drawdown, worst 1-year and 3-year windows, and fall-and-recovery
   distributions after 10/20/30% falls - ranked within a category.
-- S6b (next): the lumpsum pick, the SIP plan with the schemes' own minimums, and keep-or-exit
-  flags, all built on S6a.
+- S6b (done): the decisions. Three offline commands on the S6a data - a lumpsum ranking
+  within a measured risk band, a SIP plan with each scheme's minimum and the best/median/worst
+  of such a SIP over rolling windows plus a plain stop rule, and a keep-or-exit view for a
+  holding at a loss. The MINIMUM-HISTORY rule is shared by all three: only funds with 5+ years
+  are ranked, 3-5 years is flagged, and under 3 years is "too new to judge" - a new fund needs
+  a model of funds LIKE it, which is deferred and not built here. Nothing is stored and no
+  migration was added.
 - HONESTY (SEBI): evidence only. No predicted returns, no profit or accuracy claims, no
   promise that a fall will be recovered. Every statistics output carries "Past performance is
   not indicative of future results; information, not investment advice" and the survivorship

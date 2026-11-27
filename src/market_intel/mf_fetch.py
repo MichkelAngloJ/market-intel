@@ -527,17 +527,25 @@ class SchemeInfo:
     scheme_name: str
     category: str
     amc: str
+    plan: str
 
 
 def scheme_details(
-    conn: Any, scheme_codes: Sequence[int] | None = None, *, category: str | None = None
+    conn: Any,
+    scheme_codes: Sequence[int] | None = None,
+    *,
+    category: str | None = None,
+    plan: str | None = None,
 ) -> dict[int, SchemeInfo]:
     """The universe's names, categories and fund houses, for the S6b decision commands.
 
     The AMC is what lets a SIP plan avoid putting the whole monthly amount into one fund
     house; :func:`scheme_rows` predates it and is left alone.
     """
-    sql = ["SELECT scheme_code, scheme_name, category, amc FROM mf_schemes WHERE in_universe"]
+    sql = [
+        "SELECT scheme_code, scheme_name, category, amc, plan",
+        "FROM mf_schemes WHERE in_universe",
+    ]
     params: list[Any] = []
     if scheme_codes:
         sql.append("AND scheme_code = ANY(%s)")
@@ -545,6 +553,9 @@ def scheme_details(
     if category:
         sql.append("AND category = %s")
         params.append(category)
+    if plan:
+        sql.append("AND plan = %s")
+        params.append(plan)
     with conn.cursor() as cur:
         cur.execute(" ".join(sql), params)
         return {row[0]: SchemeInfo(*row) for row in cur.fetchall()}

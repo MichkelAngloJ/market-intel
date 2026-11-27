@@ -26,6 +26,12 @@ from market_intel.logging_setup import configure_logging, get_logger
 # Below this many rolling windows there is no spread worth calling one.
 MIN_HONEST_WINDOWS = 12
 
+# An AMFI scheme code is a plan AND an option, so one fund appears twice: Direct and
+# Regular. Ranking both fills a table with the same fund, and the Regular plan is the
+# same portfolio carrying a distributor's commission, so Direct is the default.
+PLANS = ("direct", "regular", "any")
+PLAN_HELP = "which plan to rank (default direct: the same fund without the commission)"
+
 COMPONENT = "mf"
 log = get_logger("market_intel.mf")
 
@@ -124,12 +130,23 @@ def multiple(value: float | None) -> str:
 
 
 def measured_stats(
-    settings, scheme_codes: Sequence[int] | None = None, *, category: str | None = None
+    settings,
+    scheme_codes: Sequence[int] | None = None,
+    *,
+    category: str | None = None,
+    plan: str | None = None,
 ) -> tuple[list[mf.FundStats], dict[int, mf_fetch.SchemeInfo]]:
-    """Every fund's statistics, one series at a time so a whole category never sits in RAM."""
+    """Every fund's statistics, one series at a time so a whole category never sits in RAM.
+
+    ``plan`` matters more than it looks: an AMFI scheme code is a plan AND an option, so the
+    Direct and Regular plans of one fund are two codes with almost the same history. Ranked
+    together they fill a top-ten list with the same fund twice, and nobody buys both.
+    """
     with postgres.connect(settings.require("database")) as conn:
-        details = mf_fetch.scheme_details(conn, scheme_codes, category=category)
-        unknown = mf_fetch.SchemeInfo(0, "?", "other", "?")
+        details = mf_fetch.scheme_details(conn, scheme_codes, category=category, plan=plan)
+        if plan and not details:
+            return [], {}
+        unknown = mf_fetch.SchemeInfo(0, "?", "other", "?", "unknown")
         every = [
             mf.fund_stats(
                 code,
@@ -137,7 +154,10 @@ def measured_stats(
                 details.get(code, unknown).category,
                 rows,
             )
-            for code, rows in mf_fetch.iter_series(conn, scheme_codes, category=category)
+            # With a plan filter the codes are already known, so only those series are read.
+            for code, rows in mf_fetch.iter_series(
+                conn, sorted(details) if plan else scheme_codes, category=category
+            )
         ]
     return every, details
 
@@ -214,7 +234,8 @@ def run_lumpsum(settings, args: argparse.Namespace) -> int:
     """`mf lumpsum`: which funds history paid best for the falls they put holders through."""
     band = mf.RISK_BANDS[args.risk]
     t0 = time.monotonic()
-    every, details = measured_stats(settings, category=args.category)
+    plan = None if args.plan == "any" else args.plan
+    every, details = measured_stats(settings, category=args.category, plan=plan)
     if not every:
         print("No NAV history held yet. Run `mf fetch`.", file=sys.stderr)
         return 1
@@ -223,6 +244,7 @@ def run_lumpsum(settings, args: argparse.Namespace) -> int:
     print(
         f"LUMPSUM  {rupees(args.amount)} at {band.name} risk"
         + (f", {args.category} funds only" if args.category else "")
+        + (f", {args.plan} plans only" if plan else ", every plan")
     )
     print(
         f"{len(every):,} funds measured in {time.monotonic() - t0:.1f} s; "
@@ -280,7 +302,8 @@ def _measure_text(name: str, value: float | None) -> str:
 def run_sip(settings, args: argparse.Namespace) -> int:
     """`mf sip`: split a monthly amount, then show what such a SIP came to in the past."""
     band = mf.RISK_BANDS[args.risk]
-    every, details = measured_stats(settings, category=args.category)
+    plan = None if args.plan == "any" else args.plan
+    every, details = measured_stats(settings, category=args.category, plan=plan)
     if not every:
         print("No NAV history held yet. Run `mf fetch`.", file=sys.stderr)
         return 1
@@ -292,6 +315,7 @@ def run_sip(settings, args: argparse.Namespace) -> int:
     print(
         f"SIP  {rupees(args.amount)} a month for {args.years} years at {band.name} risk"
         + (f", {args.category} funds only" if args.category else "")
+        + (f", {args.plan} plans only" if plan else ", every plan")
     )
     print(
         f"{len(every):,} funds measured; {len(eligible_now):,} eligible, and {len(keep):,} of "
@@ -512,6 +536,7 @@ def build_parser() -> argparse.ArgumentParser:
     lump.add_argument("--risk", choices=risks, required=True, help="how much movement is fine")
     lump.add_argument("--category", choices=mf.UNIVERSE_CATEGORIES)
     lump.add_argument("--top", type=int, default=5, help="how many funds to show in full")
+    lump.add_argument("--plan", choices=PLANS, default="direct", help=PLAN_HELP)
 
     sip = sub.add_parser("sip", help="split a monthly amount and show what such a SIP did")
     sip.add_argument("--amount", type=float, required=True, help="a month, in rupees")
@@ -519,6 +544,7 @@ def build_parser() -> argparse.ArgumentParser:
     sip.add_argument("--risk", choices=risks, required=True)
     sip.add_argument("--category", choices=mf.UNIVERSE_CATEGORIES)
     sip.add_argument("--funds", type=int, default=3, help="how many funds to spread across")
+    sip.add_argument("--plan", choices=PLANS, default="direct", help=PLAN_HELP)
     sip.add_argument("--goal", type=float, help="the amount that ends the plan, in rupees")
     sip.add_argument(
         "--min-history",
@@ -581,6 +607,10 @@ def run_stats(settings, args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # A mistake in the arguments is caught before anything is configured or connected to.
+    if args.command == "keep-or-exit" and args.current is None and args.buy_date is None:
+        print("Pass --current or --buy-date.", file=sys.stderr)
+        return 1
     try:
         settings = get_settings()
         configure_logging(settings, COMPONENT)
@@ -607,9 +637,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "sip":
             return run_sip(settings, args)
         if args.command == "keep-or-exit":
-            if args.current is None and args.buy_date is None:
-                print("Pass --current or --buy-date.", file=sys.stderr)
-                return 1
             return run_keep_or_exit(settings, args)
         return run_stats(settings, args)
     except ConfigError as exc:

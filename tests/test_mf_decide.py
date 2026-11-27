@@ -512,3 +512,27 @@ def test_a_sip_outcome_with_no_windows_is_empty_rather_than_zero():
     assert outcome.windows == 0
     assert outcome.value.count == 0
     assert math.isclose(outcome.invested, 0.0)
+
+
+def test_the_ranking_commands_look_at_direct_plans_unless_told_otherwise():
+    """One fund is two scheme codes - Direct and Regular - and nobody buys both."""
+    parser = mf_cli.build_parser()
+    lump = parser.parse_args(["lumpsum", "--amount", "100000", "--risk", "medium"])
+    assert lump.plan == "direct"
+    sip = parser.parse_args(["sip", "--amount", "5000", "--years", "5", "--risk", "low"])
+    assert sip.plan == "direct"
+    both = parser.parse_args(["lumpsum", "--amount", "100000", "--risk", "high", "--plan", "any"])
+    assert both.plan == "any"
+
+
+def test_risk_is_required_because_it_is_the_owners_comfort_and_not_a_guess():
+    parser = mf_cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["lumpsum", "--amount", "100000"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["sip", "--amount", "5000", "--years", "5"])
+
+
+def test_keep_or_exit_needs_a_value_or_a_buy_date_and_refuses_without_either(capsys):
+    assert mf_cli.main(["keep-or-exit", "--fund", "118989", "--invested", "100000"]) == 1
+    assert "--current or --buy-date" in capsys.readouterr().err

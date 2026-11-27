@@ -408,3 +408,20 @@
   its 90-day limit must be respected.
 - Reason (owner): Mutual funds are priority 2; I want lumpsum and SIP guidance and a
   keep-or-exit view, based on real history, with how-sure numbers.
+
+## 2026-11-27 - Mutual fund decisions: lumpsum, SIP and keep-or-exit
+- Decision: Three offline commands on the AMFI NAV stats - a lumpsum "best now" ranking
+  (risk-adjusted history within the owner's risk comfort, with how-sure stats and
+  distance-from-peak), a SIP plan (amount split across funds with minimums, the historical
+  best/median/worst of such a SIP, and a plain stop rule), and a keep-or-exit view for a fund
+  held at a loss (how the fund and its category recovered from similar falls, against the owner's
+  horizon). Only funds with >=5 years are ranked; 3-5y are flagged short-history; <3y are "too
+  new to judge". Every output carries the past-performance/not-advice disclaimer and the
+  survivorship note. Nothing predicted, nothing auto-executed, no results committed.
+- Concern (planner): These are investment-advice-shaped; they must present evidence and
+  uncertainty, never a predicted return or a promise to recover (SEBI). Survivorship bias and
+  short history both flatter rankings; the minimum-history rule and the survivorship note guard
+  against it. New funds cannot be judged on their own history - that needs the deferred
+  similarity model.
+- Reason (owner): I want lumpsum and SIP guidance and a keep-or-exit decision, based on real
+  history, with how-sure numbers.

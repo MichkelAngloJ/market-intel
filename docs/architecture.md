@@ -1172,6 +1172,80 @@ flattered by their absence - and with "Past performance is not indicative of fut
 information, not investment advice." The lumpsum pick, the SIP plan and keep-or-exit come in
 S6b, on top of this.
 
+### Turning the statistics into a decision (S6b)
+
+Three offline commands sit on top of the NAV. They read what is stored, compute on demand and
+print; nothing is written back, so there is no migration and no stored result to go stale.
+
+**The minimum-history rule comes first**, and all three share it. S6a found that 841 of the
+2,255 funds in the universe have under three years of NAV, so:
+
+| History | What happens |
+|---|---|
+| 5 years or more | ranked |
+| 3 to 5 years | flagged `short history`; shown, never ranked |
+| under 3 years | `too new to judge`; not ranked at all |
+
+A new fund cannot be judged on its own history, and judging it on anything else means a model
+of funds LIKE it, which this project has not built. The rule is printed on every output rather
+than applied quietly, because a fund missing from a ranking is itself information.
+
+Five years is not the SAME five years, though, and the rule cannot fix that on its own: a fund
+whose NAV begins after a crash has never been through one, so its worst windows are the worst
+of a short and lucky stretch. `mf lumpsum` therefore prints the span of start dates across the
+eligible funds and each fund's own history line next to its score.
+
+**Risk comfort is measured, not labelled.** A band is two ceilings on what the fund itself
+did - annualised volatility and the deepest fall below a peak - so a fund is in or out because
+of its NAV, never because of its name:
+
+| Band | Volatility at most | Deepest fall at most |
+|---|---|---|
+| low | 12% a year | 25% |
+| medium | 18% a year | 40% |
+| high | no ceiling | no ceiling |
+
+Those numbers are a choice made in this project, written down so that "low risk" means the
+same thing every time it is printed.
+
+Both ranking commands look at ONE plan at a time, Direct by default. An AMFI scheme code is
+a plan and an option together, so a fund's Direct and Regular codes have nearly the same
+history; ranked side by side they fill a top-ten list with the same fund twice, and the
+Regular plan is that same portfolio carrying a distributor's commission.
+
+**`mf lumpsum`** ranks the eligible funds on three historical measures at once: return a year
+per unit of the deepest fall, the middle 5-year window, and the WORST 3-year window. Each is
+turned into a percentile within the eligible pool first and the score is the mean of those,
+because the three are in different units and averaging them raw would hand the ordering to
+whichever happened to have the widest spread. Ties share a percentile and the sort breaks ties
+on the scheme code, so the result never depends on the order funds arrived in. Each fund is
+then printed with its own "how sure" numbers and how far below its highest NAV it sits today -
+a fact, not a reason to buy or to sell.
+
+**`mf sip`** splits a monthly amount across a few funds (at most one per fund house, with the
+categories spread before any category gets a second fund), respecting each scheme's minimum.
+AMFI's files do not carry the minimum SIP, so it is an INPUT with a documented default and the
+report says so. The horizon then raises the history bar: a fund with five years cannot be put
+into a ten-year plan and then asked how such a plan went, because there is no ten-year window
+to look at. The plan is run from the same day of every month the shared history allows, and
+the best / median / worst of those windows is the answer to "how sure". Those windows overlap
+heavily - starts a month apart share all but one instalment - so the report says that too, and
+warns when there are too few of them to call a spread. A plain stop rule is printed with the
+plan: the horizon, the goal, and a fund dropping out of the better half of its category at six
+monthly reviews in a row. A market fall is deliberately NOT on that list.
+
+**`mf keep-or-exit`** takes a holding and its loss and answers it with history. The depth it
+matches is the deeper of the fund's own fall from its peak and the owner's loss on what was
+put in. It then shows, for THIS fund and for every fund in its category with enough history,
+how many falls that deep there were, how many got back to the same peak, how many were still
+under water when the history ended, and the SPREAD of how long the recoveries took - split by
+the owner's remaining horizon. Keep and exit are put side by side as trade-offs. Nothing says
+the fund will recover.
+
+What none of the three do: predict a return, score a fund's quality, promise a recovery, or
+act. Every output ends with the survivorship note and "past performance is not indicative of
+future results".
+
 ## Models, evaluation, costs and the registry
 
 Sprint task S3 (decisions 2026-11-24). Command: `market_intel.models` (`train`, `report`, `ui`);
