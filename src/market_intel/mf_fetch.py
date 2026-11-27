@@ -519,6 +519,41 @@ def _stream(
         yield current, rows
 
 
+def nav_spans(
+    conn: Any,
+    scheme_codes: Sequence[int] | None = None,
+    *,
+    category: str | None = None,
+    plan: str | None = None,
+) -> list[mf.Span]:
+    """How much NAV is held per fund, from a GROUP BY rather than the series themselves.
+
+    The common window has to be known BEFORE the series are streamed, so that one pass can
+    measure both a fund's whole history and its slice of the shared window. This aggregate
+    costs a fraction of a second against three and a half million rows, while streaming every
+    series twice would double the whole command.
+    """
+    sql = [
+        "SELECT n.scheme_code, min(n.nav_date), max(n.nav_date)",
+        "FROM mf_nav n JOIN mf_schemes s ON s.scheme_code = n.scheme_code",
+        "WHERE s.in_universe",
+    ]
+    params: list[Any] = []
+    if scheme_codes:
+        sql.append("AND n.scheme_code = ANY(%s)")
+        params.append(list(scheme_codes))
+    if category:
+        sql.append("AND s.category = %s")
+        params.append(category)
+    if plan:
+        sql.append("AND s.plan = %s")
+        params.append(plan)
+    sql.append("GROUP BY n.scheme_code")
+    with conn.cursor() as cur:
+        cur.execute(" ".join(sql), params)
+        return [mf.Span(code, first, last) for code, first, last in cur.fetchall()]
+
+
 @dataclass(frozen=True, slots=True)
 class SchemeInfo:
     """What the decision commands need about a scheme besides its NAV."""

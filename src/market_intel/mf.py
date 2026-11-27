@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
@@ -346,14 +346,20 @@ def percentile(sorted_values: Sequence[float], q: float) -> float:
     return sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac
 
 
-def rolling_returns(series: Series, years: int) -> Distribution:
+def rolling_returns(series: Series, years: int, *, overlapping: bool = True) -> Distribution:
     """Annualised return of every ``years``-long window, one per trading day as a start.
 
     A window's end is the last NAV on or before start + ``years`` calendar years, so a fund
     that stopped reporting does not get a free extension.
+
+    With ``overlapping=False`` each window instead begins where the previous one ended, so no
+    stretch of market is counted twice. There are far fewer of them and their spread is wider,
+    because that spread is not propped up by the same years appearing over and over.
     """
+    starts = range(len(series.dates)) if overlapping else independent_starts(series.dates, years)
     out: list[float] = []
-    for i, start_date in enumerate(series.dates):
+    for i in starts:
+        start_date = series.dates[i]
         target = _add_years(start_date, years)
         if target > series.dates[-1]:
             break
@@ -468,6 +474,7 @@ class Episode:
     reached_on: date  # the day the fall first reached the level
     depth: float
     recovered_on: date | None
+    trough_date: date | None = None  # the deepest day of the fall
 
     @property
     def days(self) -> int | None:
@@ -491,6 +498,7 @@ def fall_episodes(series: Series, level: float) -> list[Episode]:
     # (peak date, peak NAV, the day the fall reached the level) while an episode is open.
     open_ep: tuple[date, float, date] | None = None
     depth = 0.0
+    trough: date | None = None
     out: list[Episode] = []
     for i in range(1, len(series)):
         nav, d = series.navs[i], series.dates[i]
@@ -500,14 +508,17 @@ def fall_episodes(series: Series, level: float) -> list[Episode]:
             elif 1.0 - nav / peak >= level:
                 open_ep = (peak_date, peak, d)
                 depth = 1.0 - nav / peak
+                trough = d
         else:
-            depth = max(depth, 1.0 - nav / open_ep[1])
+            if 1.0 - nav / open_ep[1] > depth:
+                depth = 1.0 - nav / open_ep[1]
+                trough = d
             if nav >= open_ep[1]:
-                out.append(Episode(open_ep[0], open_ep[1], open_ep[2], depth, d))
+                out.append(Episode(open_ep[0], open_ep[1], open_ep[2], depth, d, trough))
                 peak, peak_date = nav, d
-                open_ep = None
+                open_ep, trough = None, None
     if open_ep is not None:
-        out.append(Episode(open_ep[0], open_ep[1], open_ep[2], depth, None))
+        out.append(Episode(open_ep[0], open_ep[1], open_ep[2], depth, None, trough))
     return out
 
 
@@ -577,6 +588,9 @@ class FundStats:
     rolling: dict[int, Distribution] = field(default_factory=dict)
     recovery: dict[float, FallAndRecovery] = field(default_factory=dict)
     peak: PeakDistance | None = None
+    # The same windows again, but NON-OVERLAPPING: each one begins where the last ended, so
+    # no stretch of market is counted twice and the spread is not propped up by repetition.
+    rolling_independent: dict[int, Distribution] = field(default_factory=dict)
 
     @property
     def grade(self) -> str:
@@ -621,6 +635,7 @@ def fund_stats(
         rolling={y: rolling_returns(series, y) for y in years},
         recovery={lv: fall_and_recovery(series, lv) for lv in levels},
         peak=distance_below_peak(series),
+        rolling_independent={y: rolling_returns(series, y, overlapping=False) for y in years},
     )
 
 
@@ -760,8 +775,12 @@ def lumpsum_measures(stats: FundStats) -> dict[str, float | None]:
     five, three = stats.rolling.get(5), stats.rolling.get(3)
     return {
         # A fund that has never fallen gets no ratio here rather than an infinite one. With
-        # five years of real NAV that does not happen; a synthetic series can.
-        "return_per_fall": None if grew is None or fall <= 0 else grew / fall,
+        # five years of real NAV that does not happen; a synthetic series can. A fall smaller
+        # than MIN_MEANINGFUL_FALL is treated as that, because dividing by a near-zero
+        # denominator makes the ratio say more about the denominator than about the fund.
+        "return_per_fall": None
+        if grew is None or fall <= 0
+        else grew / max(fall, MIN_MEANINGFUL_FALL),
         "median_5y": five.median if five is not None and five.count else None,
         "worst_3y": three.worst if three is not None and three.count else None,
     }
@@ -785,22 +804,7 @@ def rank_lumpsum(stats: Sequence[FundStats]) -> list[Ranked]:
     Deterministic: ties share a percentile and the final sort breaks ties on the scheme code,
     so the ordering depends only on the numbers, never on the order the funds arrived in.
     """
-    measured = [(s, lumpsum_measures(s)) for s in stats]
-    pools: dict[str, list[float]] = {}
-    for name in LUMPSUM_MEASURES:
-        values = [m[name] for _s, m in measured]
-        pools[name] = sorted(v for v in values if v is not None)
-    out: list[Ranked] = []
-    for s, m in measured:
-        percentiles: dict[str, float] = {}
-        for name in LUMPSUM_MEASURES:
-            value = m[name]
-            if value is not None and pools[name]:
-                percentiles[name] = percentile_rank(pools[name], value)
-        score = sum(percentiles.values()) / len(percentiles) if percentiles else 0.0
-        out.append(Ranked(stats=s, score=score, percentiles=percentiles, measures=m))
-    out.sort(key=lambda r: (-r.score, r.stats.scheme_code))
-    return out
+    return rank_on(stats, LUMPSUM_MEASURES, lumpsum_measures)
 
 
 def eligible(
@@ -831,6 +835,9 @@ def eligible(
 # AMFI's files carry NAV, not terms: the minimum SIP instalment is NOT in them. It is an
 # input with a documented default, and the report says so, because a plan that quietly
 # assumes a minimum is a plan the owner cannot act on.
+# Below this, a drawdown is noise and the return-per-fall ratio stops meaning anything.
+MIN_MEANINGFUL_FALL = 0.01
+
 DEFAULT_MIN_SIP = 500.0
 SIP_STEP = 100.0
 MIN_SIP_NOTE = (
@@ -965,11 +972,12 @@ def xirr(
     return (low + high) / 2
 
 
-def month_starts(first: date, last: date, day: int = 1) -> list[date]:
-    """The same day of each month from ``first`` to ``last``, inclusive.
+def month_starts(first: date, last: date, day: int = 1, step: int = 1) -> list[date]:
+    """The same day of every ``step``-th month from ``first`` to ``last``, inclusive.
 
     A month too short for the day (the 31st of February) uses its 28th, which is what a
-    mandate does in practice.
+    mandate does in practice. ``step`` is 1 for instalments; a SIP's own start dates use a
+    whole horizon as the step when the windows have to be independent.
     """
     out: list[date] = []
     year, month = first.year, first.month
@@ -982,7 +990,8 @@ def month_starts(first: date, last: date, day: int = 1) -> list[date]:
             return out
         if when >= first:
             out.append(when)
-        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        month += step
+        year, month = year + (month - 1) // 12, (month - 1) % 12 + 1
 
 
 def nav_on_or_before(series: Series, when: date) -> float | None:
@@ -1047,8 +1056,15 @@ def sip_run(
     return invested, value, xirr(flows)
 
 
-def sip_windows(plan: Sequence[tuple[float, Series]], years: int) -> SipOutcome:
-    """Run the same SIP from the same day of every month the history can support."""
+def sip_windows(
+    plan: Sequence[tuple[float, Series]], years: int, *, step_months: int = 1
+) -> SipOutcome:
+    """Run the same SIP from the same day of every ``step_months``-th month history allows.
+
+    ``step_months`` of ``years * 12`` makes the windows NON-OVERLAPPING: each one uses a
+    stretch of market the others do not touch, so the spread is the honest width rather than
+    the same decade counted a hundred times.
+    """
     empty = Distribution.of([])
     if not plan or years <= 0:
         return SipOutcome(0, 0.0, empty, empty, empty)
@@ -1061,7 +1077,7 @@ def sip_windows(plan: Sequence[tuple[float, Series]], years: int) -> SipOutcome:
     rates: list[float] = []
     used: list[date] = []
     invested = 0.0
-    for when in month_starts(max(starts), _add_years(min(ends), -years)):
+    for when in month_starts(max(starts), _add_years(min(ends), -years), step=step_months):
         run = sip_run(plan, when, years)
         if run is None:
             continue
@@ -1185,6 +1201,287 @@ KEEP_OR_EXIT_TRADE_OFFS = (
     "Neither column is a recommendation. Nothing here says this fund will recover; the "
     "decision is the owner's.",
 )
+
+
+# --- comparing funds of different ages on the same market (S6c) ---------------------------
+# S6b ranked every fund on its OWN history, and five years is not the same five years: a fund
+# whose NAV begins in mid-2020 starts at the bottom of a crash, so its worst case is the worst
+# of a lucky stretch and it can top a table without ever having been through a fall. The
+# headline ranking is therefore computed over ONE window that every ranked fund covers, and
+# each fund is flagged by whether its own history lived through a decline at all.
+MAX_STALE_DAYS = 30
+REFERENCE_FALL = 0.20
+MIN_REFERENCE_FUNDS = 3
+# The decline calendar is built from a sample of the longest-lived equity and index funds,
+# not from every fund and not per category. Two reasons. An equal-weighted index of sixty
+# funds has the same shape as one of eleven hundred, so the rest is work for nothing. And the
+# question the flag answers is "did this fund exist while the MARKET fell", which a category's
+# own index cannot answer: the hybrid index never fell 20% even in 2020, so judging hybrid
+# funds against it marks every one of them untested, including the ones that lived through it.
+REFERENCE_SAMPLE = 60
+REFERENCE_CATEGORIES = ("equity", "index")
+# A daily move further than this is a data error, not a market: one bad NAV would otherwise
+# put a fake crash into the reference every fund is then judged against.
+MAX_PLAUSIBLE_DAILY_MOVE = 0.5
+
+
+@dataclass(frozen=True, slots=True)
+class Span:
+    """How much NAV is held for one fund. Cheap: it comes from a GROUP BY, not the series."""
+
+    scheme_code: int
+    first: date
+    last: date
+
+    @property
+    def years(self) -> float:
+        return (self.last - self.first).days / 365.25
+
+
+@dataclass(frozen=True, slots=True)
+class CommonWindow:
+    """The one stretch of market every ranked fund is measured over."""
+
+    start: date | None
+    end: date | None
+    funds: int = 0
+    stale: int = 0
+    too_short: int = 0
+    asked_years: int | None = None
+
+    @property
+    def years(self) -> float:
+        if self.start is None or self.end is None:
+            return 0.0
+        return (self.end - self.start).days / 365.25
+
+    @property
+    def ok(self) -> bool:
+        return self.start is not None and self.end is not None and self.funds > 0
+
+
+def common_window(
+    spans: Sequence[Span],
+    *,
+    years: int | None = None,
+    stale_days: int = MAX_STALE_DAYS,
+    min_years: float = MIN_RANK_YEARS,
+) -> tuple[CommonWindow, list[int]]:
+    """The longest trailing window every eligible fund covers, and who covers it.
+
+    Eligibility here is the minimum-history rule ALONE, deliberately: the window is then the
+    same whatever risk band the owner asks for, so the ranking does not silently move because
+    a ceiling changed.
+
+    A fund that stopped reporting is dropped first. One dead fund would otherwise drag the
+    window's end back by years and take every live fund's recent history with it.
+
+    With ``years`` the window is instead the last ``years`` of market and only the funds that
+    cover it are ranked - the way to get a window that includes an actual crash.
+    """
+    if not spans:
+        return CommonWindow(None, None), []
+    newest = max(s.last for s in spans)
+    fresh = [s for s in spans if (newest - s.last).days <= stale_days]
+    stale = len(spans) - len(fresh)
+    long_enough = [s for s in fresh if s.years >= min_years]
+    if not long_enough:
+        return CommonWindow(None, None, stale=stale), []
+    end = min(s.last for s in long_enough)
+    start = _add_years(end, -years) if years is not None else max(s.first for s in long_enough)
+    covered = [s for s in long_enough if s.first <= start]
+    if not covered or start >= end:
+        return CommonWindow(
+            None, None, stale=stale, too_short=len(long_enough), asked_years=years
+        ), []
+    return (
+        CommonWindow(
+            start=start,
+            end=end,
+            funds=len(covered),
+            stale=stale,
+            too_short=len(long_enough) - len(covered),
+            asked_years=years,
+        ),
+        sorted(s.scheme_code for s in covered),
+    )
+
+
+def slice_series(series: Series, start: date, end: date) -> Series:
+    """The part of a fund's NAV inside a window, so every fund is measured over one market."""
+    keep = [(d, nav) for d, nav in zip(series.dates, series.navs, strict=True) if start <= d <= end]
+    return Series(tuple(d for d, _n in keep), tuple(n for _d, n in keep))
+
+
+# The common-period measures are NOT the full-history ones. Over a single shared window a
+# plain CAGR is already comparable between funds, which it never is across different spans,
+# and the 5-year and 3-year windows the full-history ranking leans on barely exist inside a
+# window that is itself about five years long.
+COMMON_MEASURES: tuple[str, ...] = ("return_per_fall", "cagr", "worst_1y")
+
+COMMON_MEASURE_NOTE = {
+    "return_per_fall": "return a year over the shared window, per unit of its deepest fall",
+    "cagr": "return a year over the shared window - the same market for every fund here",
+    "worst_1y": "the WORST year inside the shared window: the bad case over that same market",
+}
+
+
+def common_measures(stats: FundStats) -> dict[str, float | None]:
+    """The ranking measures for one fund, computed on its slice of the shared window."""
+    fall = stats.max_drawdown.depth
+    grew = stats.cagr_since_start
+    one = stats.rolling.get(1)
+    return {
+        "return_per_fall": (
+            None if grew is None or fall <= 0 else grew / max(fall, MIN_MEANINGFUL_FALL)
+        ),
+        "cagr": grew,
+        "worst_1y": one.worst if one is not None and one.count else None,
+    }
+
+
+def rank_on(
+    stats: Sequence[FundStats],
+    names: Sequence[str],
+    measure_of: Callable[[FundStats], dict[str, float | None]],
+) -> list[Ranked]:
+    """Rank funds on several measures at once, each turned into a percentile first.
+
+    The measures are in different units, so averaging them raw would hand the ordering to
+    whichever happens to have the widest spread. Ties share a percentile and the final sort
+    breaks ties on the scheme code, so the ordering depends only on the numbers.
+    """
+    measured = [(s, measure_of(s)) for s in stats]
+    pools: dict[str, list[float]] = {}
+    for name in names:
+        pools[name] = sorted(v for _s, m in measured if (v := m[name]) is not None)
+    out: list[Ranked] = []
+    for s, m in measured:
+        percentiles: dict[str, float] = {}
+        for name in names:
+            value = m[name]
+            if value is not None and pools[name]:
+                percentiles[name] = percentile_rank(pools[name], value)
+        score = sum(percentiles.values()) / len(percentiles) if percentiles else 0.0
+        out.append(Ranked(stats=s, score=score, percentiles=percentiles, measures=m))
+    out.sort(key=lambda r: (-r.score, r.stats.scheme_code))
+    return out
+
+
+def rank_common(stats: Sequence[FundStats]) -> list[Ranked]:
+    """The headline ranking: every fund measured over the one window they all share."""
+    return rank_on(stats, COMMON_MEASURES, common_measures)
+
+
+# --- has this fund ever been through a fall? ----------------------------------------------
+class Reference:
+    """An equal-weighted, daily-rebalanced index of a category, built from the funds held.
+
+    There is no index data in this project, so the reference is made out of the category's own
+    NAV: each day's move is the average move of every fund that reported on that day AND the
+    day before. Averaging RETURNS rather than levels is what lets funds join and leave without
+    putting a step into the series.
+
+    It inherits the survivorship bias of the data it is made from, so it is a yardstick for
+    "was there a decline around then", never a benchmark a fund is scored against.
+    """
+
+    __slots__ = ("counts", "sums")
+
+    def __init__(self) -> None:
+        self.sums: dict[date, float] = {}
+        self.counts: dict[date, int] = {}
+
+    def add(self, series: Series) -> None:
+        for i in range(1, len(series)):
+            if series.navs[i - 1] <= 0:
+                continue
+            move = series.navs[i] / series.navs[i - 1] - 1.0
+            if abs(move) > MAX_PLAUSIBLE_DAILY_MOVE:
+                continue
+            when = series.dates[i]
+            self.sums[when] = self.sums.get(when, 0.0) + move
+            self.counts[when] = self.counts.get(when, 0) + 1
+
+    def build(self, *, min_funds: int = MIN_REFERENCE_FUNDS) -> Series:
+        """The index itself, starting at 100 on the first day enough funds reported."""
+        dates: list[date] = []
+        levels: list[float] = []
+        level = 100.0
+        for when in sorted(self.sums):
+            if self.counts[when] < min_funds:
+                continue
+            level *= 1.0 + self.sums[when] / self.counts[when]
+            dates.append(when)
+            levels.append(level)
+        return Series(tuple(dates), tuple(levels))
+
+
+def reference_falls(reference: Series, level: float = REFERENCE_FALL) -> list[Episode]:
+    """The declines of at least ``level`` in a category reference, peak to trough and back."""
+    return fall_episodes(reference, level)
+
+
+SURVIVED = "survived a fall"
+UNTESTED = "untested in a downturn"
+
+UNTESTED_NOTE = (
+    "A fund marked 'untested in a downturn' has no decline of "
+    f"{REFERENCE_FALL:.0%} or more anywhere in its own history. That is not a fault of the "
+    "fund and not a prediction about it: it means its record says nothing at all about how it "
+    "behaves when the market falls, so the comparison with a fund that has been through one "
+    "is not like for like."
+)
+
+
+def falls_lived_through(first: date, last: date, falls: Sequence[Episode]) -> int:
+    """How many of the reference's declines this fund's own history covers.
+
+    A fund counts as having lived through a decline only if it was already reporting at the
+    PEAK and still reporting at the trough. Joining halfway down means its record starts at a
+    price that had already fallen, which is the flattering case this flag exists to catch.
+    """
+    count = 0
+    for fall in falls:
+        bottom = fall.trough_date or fall.reached_on
+        if first <= fall.peak_date and last >= bottom:
+            count += 1
+    return count
+
+
+def fall_flag(count: int) -> str:
+    return SURVIVED if count else UNTESTED
+
+
+# --- windows that are actually independent ------------------------------------------------
+# Rolling windows a day or a month apart share almost all of their history, so a hundred of
+# them are nowhere near a hundred tries and their spread reads far more settled than the truth.
+# Every spread this module reports therefore comes with the non-overlapping version beside it.
+OVERLAP_NOTE = (
+    "Read both spreads. Overlapping windows share almost all of their history, so counting "
+    "them overstates how much evidence there is - a hundred of them are not a hundred tries. "
+    "Non-overlapping windows use each stretch of market exactly once, but there are few of "
+    "them and a fall landing across a boundary can be split between two windows and show up "
+    "in neither, so the narrower of the two spreads is not the safer one."
+)
+
+
+def independent_starts(dates: Sequence[date], years: int) -> list[int]:
+    """Positions of window starts that do not overlap: each begins where the last one ended."""
+    out: list[int] = []
+    i = 0
+    if not dates or years <= 0:
+        return out
+    while i < len(dates):
+        target = _add_years(dates[i], years)
+        if target > dates[-1]:
+            break
+        j = _index_on_or_before(dates, target)
+        if j is None or j <= i:
+            break
+        out.append(i)
+        i = j
+    return out
 
 
 if __name__ == "__main__":  # pragma: no cover - `python -m market_intel.mf fetch|stats`

@@ -13,9 +13,11 @@ that still exist, which is not the same as the funds somebody could have bought.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 
 from market_intel import mf, mf_fetch
@@ -91,6 +93,9 @@ def stats_lines(stats: mf.FundStats, *, rank: float | None = None) -> list[str]:
         out.append("  rolling returns a year, over every start date in the history:")
         for years_ in sorted(stats.rolling):
             out.append(distribution_line(f"{years_}-year windows", stats.rolling[years_]))
+            apart = stats.rolling_independent.get(years_)
+            if apart is not None and apart.count:
+                out.append(distribution_line("  of those, independent", apart))
     if stats.recovery:
         out.append("  after a fall from a peak, how often it got back and how long that took:")
         for level in sorted(stats.recovery):
@@ -195,11 +200,25 @@ def how_sure_lines(stats: mf.FundStats) -> list[str]:
         f"median {pct(one.median if one else None)}, "
         f"best {pct(one.best if one else None)}   <- the year somebody actually had",
     ]
+    independent_1y = stats.rolling_independent.get(1)
+    if independent_1y is not None and independent_1y.count:
+        out.append(
+            f"    independent    worst {pct(independent_1y.worst)}, "
+            f"median {pct(independent_1y.median)}, best {pct(independent_1y.best)}   "
+            f"<- {independent_1y.count} years that do not overlap"
+        )
     if ten is not None and ten.count:
         out.append(
             f"  10-year windows  worst {pct(ten.worst)}, median {pct(ten.median)}, "
             f"best {pct(ten.best)}   <- the same fund, held ten years"
         )
+        independent_10y = stats.rolling_independent.get(10)
+        if independent_10y is not None and independent_10y.count:
+            out.append(
+                f"    independent    worst {pct(independent_10y.worst)}, "
+                f"median {pct(independent_10y.median)}, best {pct(independent_10y.best)}   "
+                f"<- {independent_10y.count} ten-year stretch(es) that do not overlap"
+            )
     else:
         out.append("  10-year windows  no complete 10-year window in the history held")
     out.append(f"  deepest fall     {pct(dd.depth)} below a peak, {back}")
@@ -211,50 +230,225 @@ def how_sure_lines(stats: mf.FundStats) -> list[str]:
     return out
 
 
-def common_period_caveat(keep: Sequence[mf.FundStats]) -> list[str]:
-    """Five years of history is not the SAME five years, and that shows up in the ranking.
+@dataclass(frozen=True, slots=True)
+class Measured:
+    """One pass over the NAV, which is the expensive part, giving everything S6c needs.
 
-    A fund whose NAV begins after a crash has never been through one, so its worst windows
-    are only the worst of a short and lucky stretch. The minimum-history rule cannot catch
-    that on its own, so the span of start dates is printed and the reader is pointed at each
-    fund's own history line.
+    ``full`` is each fund's whole history, for context. ``windowed`` is its slice of the one
+    shared window, which is what the headline ranking uses. ``falls`` is the declines found in
+    a broad market reference, which is what the survived-a-fall flag is measured against.
     """
-    starts = [s.start for s in keep if s.start is not None]
-    if not starts:
-        return []
-    return [
-        f"  Eligible histories begin between {min(starts)} and {max(starts)}. Five years is "
-        "not the SAME five years:",
-        "  a fund whose NAV starts after a fall has not been through one, so read each "
-        "fund's history line before its score.",
+
+    full: dict[int, mf.FundStats]
+    windowed: dict[int, mf.FundStats]
+    falls: list[mf.Episode]
+    reference: mf.Series
+    reference_funds: int
+    details: dict[int, mf_fetch.SchemeInfo]
+    window: mf.CommonWindow
+    seconds: float
+
+    def flag(self, code: int) -> tuple[str, int]:
+        """The survived-a-fall flag for one fund, and how many declines it lived through."""
+        stats = self.full.get(code)
+        if stats is None or stats.start is None or stats.end is None:
+            return mf.UNTESTED, 0
+        lived = mf.falls_lived_through(stats.start, stats.end, self.falls)
+        return mf.fall_flag(lived), lived
+
+
+def market_reference(settings, *, sample: int = mf.REFERENCE_SAMPLE) -> tuple[mf.Series, int]:
+    """A broad equity reference, from the longest-lived equity and index funds held.
+
+    There is no index data in this project, so the yardstick is built out of the funds
+    themselves. The sample is the funds with the earliest NAV (ties broken on scheme code), so
+    it is deterministic and reaches as far back as the data does; sixty of them give the same
+    shape as all of them for the only thing it is used for, which is WHEN the market fell.
+    """
+    builder = mf.Reference()
+    with postgres.connect(settings.require("database")) as conn:
+        spans: list[mf.Span] = []
+        for name in mf.REFERENCE_CATEGORIES:
+            spans.extend(mf_fetch.nav_spans(conn, category=name))
+        # Every plan, deliberately: SEBI only created Direct plans in January 2013, so a
+        # Direct-only reference cannot see a thing before then and would miss the 2011 fall.
+        # Which plan a fund is does not change the shape of the market it moved in.
+        spans.sort(key=lambda span: (span.first, span.scheme_code))
+        codes = [span.scheme_code for span in spans[:sample]]
+        if not codes:
+            return mf.Series((), ()), 0
+        for _code, rows in mf_fetch.iter_series(conn, codes):
+            builder.add(mf.Series.build(rows))
+    return builder.build(), len(codes)
+
+
+def measure_everything(
+    settings,
+    *,
+    category: str | None = None,
+    plan: str | None = None,
+    common_years: int | None = None,
+) -> Measured:
+    """Read every relevant series ONCE and get the full history, the window and the flag.
+
+    The window has to be known before the series are read, which is why it comes from a cheap
+    aggregate over the dates rather than from the series themselves. Streaming the NAV twice
+    would double the only slow part of the command.
+    """
+    t0 = time.monotonic()
+    reference, reference_funds = market_reference(settings)
+    unknown = mf_fetch.SchemeInfo(0, "?", "other", "?", "unknown")
+    full: dict[int, mf.FundStats] = {}
+    windowed: dict[int, mf.FundStats] = {}
+    with postgres.connect(settings.require("database")) as conn:
+        details = mf_fetch.scheme_details(conn, category=category, plan=plan)
+        spans = mf_fetch.nav_spans(conn, category=category, plan=plan)
+        window, covering = mf.common_window(spans, years=common_years)
+        wanted = set(covering)
+        codes = sorted(details) if (plan or category) else None
+        for code, rows in mf_fetch.iter_series(conn, codes, category=category):
+            info = details.get(code, unknown)
+            full[code] = mf.fund_stats(code, info.scheme_name, info.category, rows)
+            if code in wanted and window.ok and window.start and window.end:
+                part = mf.slice_series(mf.Series.build(rows), window.start, window.end)
+                windowed[code] = mf.fund_stats(
+                    code,
+                    info.scheme_name,
+                    info.category,
+                    zip(part.dates, part.navs, strict=True),
+                    years=(1,),
+                    levels=(),
+                )
+    return Measured(
+        full=full,
+        windowed=windowed,
+        falls=mf.reference_falls(reference),
+        reference=reference,
+        reference_funds=reference_funds,
+        details=details,
+        window=window,
+        seconds=time.monotonic() - t0,
+    )
+
+
+def window_lines(window: mf.CommonWindow, measured: int) -> list[str]:
+    """What the shared window is, and who it cost."""
+    if not window.ok:
+        asked = f"the last {window.asked_years} years" if window.asked_years else "any window"
+        return [
+            f"No shared window: no eligible fund covers {asked}. "
+            f"{window.too_short} fund(s) have the five years but not that span."
+        ]
+    how = (
+        f"the last {window.asked_years} years, as asked"
+        if window.asked_years
+        else "the longest stretch EVERY eligible fund covers"
+    )
+    out = [
+        f"Shared window: {window.start} to {window.end} ({window.years:.1f} years) - {how}.",
+        f"  {window.funds:,} of the {measured:,} funds measured are ranked over it.",
     ]
+    short = measured - window.funds - window.stale - window.too_short
+    if short > 0:
+        out.append(
+            f"  {short:,} fund(s) have under {mf.MIN_RANK_YEARS:g} years of NAV: too little "
+            "history to be ranked at all."
+        )
+    if window.stale:
+        out.append(
+            f"  {window.stale} fund(s) dropped as stale: no NAV for over "
+            f"{mf.MAX_STALE_DAYS} days, so they cannot be bought and would have dragged the "
+            "window's end backwards."
+        )
+    if window.too_short:
+        out.append(
+            f"  {window.too_short:,} fund(s) have five years of NAV but do not cover this "
+            "window, so they are not ranked here."
+        )
+    return out
+
+
+def reference_lines(got: Measured) -> list[str]:
+    """What the market itself did, and whether the shared window contains any of it."""
+    if not len(got.reference):
+        return ["  not enough funds reporting together to build a reference."]
+    out = [
+        f"  An equal-weighted index of the {got.reference_funds} longest-lived equity and "
+        f"index funds held, {got.reference.start} to {got.reference.end}."
+    ]
+    if not got.falls:
+        out.append(f"  No decline of {mf.REFERENCE_FALL:.0%} or more anywhere in it.")
+        return out
+    for fall in got.falls:
+        back = f"back on {fall.recovered_on}" if fall.recovered_on else "NOT back yet"
+        out.append(
+            f"    -{fall.depth:.0%}: peak {fall.peak_date}, trough {fall.trough_date}, {back}"
+        )
+    window = got.window
+    inside = [
+        f
+        for f in got.falls
+        if window.start is not None
+        and window.end is not None
+        and f.peak_date >= window.start
+        and (f.trough_date or f.reached_on) <= window.end
+    ]
+    if inside:
+        out.append(f"    {len(inside)} of those fall inside the shared window.")
+    else:
+        out.append(
+            "    NONE of those fall inside the shared window, so the window itself contains "
+            "no real decline. Every fund is compared fairly, but on a market that only rose; "
+            "--common-years buys a longer window with a fall in it."
+        )
+    return out
+
+
+def both_windows_line(
+    label: str, overlapping: mf.Distribution, independent: mf.Distribution
+) -> list[str]:
+    """A spread twice: as it is usually reported, and once per stretch of market."""
+    out = [distribution_line(f"{label}, overlapping", overlapping)]
+    if independent.count:
+        out.append(distribution_line(f"{label}, independent", independent))
+    return out
 
 
 def run_lumpsum(settings, args: argparse.Namespace) -> int:
-    """`mf lumpsum`: which funds history paid best for the falls they put holders through."""
+    """`mf lumpsum`: rank the eligible funds over ONE window they all share."""
     band = mf.RISK_BANDS[args.risk]
-    t0 = time.monotonic()
     plan = None if args.plan == "any" else args.plan
-    every, details = measured_stats(settings, category=args.category, plan=plan)
-    if not every:
+    got = measure_everything(
+        settings, category=args.category, plan=plan, common_years=args.common_years
+    )
+    if not got.full:
         print("No NAV history held yet. Run `mf fetch`.", file=sys.stderr)
         return 1
-    keep, dropped = mf.eligible(every, band)
-    too_short = sum(1 for s, _why in dropped if mf.history_grade(s.years) != mf.RANKED)
+
     print(
         f"LUMPSUM  {rupees(args.amount)} at {band.name} risk"
         + (f", {args.category} funds only" if args.category else "")
         + (f", {args.plan} plans only" if plan else ", every plan")
     )
+    print(f"{len(got.full):,} funds measured in {got.seconds:.1f} s.")
+    print("\n".join(window_lines(got.window, len(got.full))))
+    if not got.window.ok:
+        print("\n".join(history_note() + report_footer()))
+        return 0
+
+    print("\nWhat the market itself did, so 'survived a fall' means something:")
+    print("\n".join(reference_lines(got)))
+
+    pool = [got.full[code] for code in sorted(got.windowed)]
+    keep, dropped = mf.eligible(pool, band)
     print(
-        f"{len(every):,} funds measured in {time.monotonic() - t0:.1f} s; "
-        f"{len(keep):,} are eligible. Left out: {too_short:,} on history, "
-        f"{len(dropped) - too_short:,} outside the {band.name} band."
+        f"\n{len(keep):,} of the {len(pool):,} ranked funds are inside the {band.name} band; "
+        f"{len(dropped):,} are outside it."
     )
-    if band.max_volatility is not None:
+    if band.max_volatility is not None and band.max_fall is not None:
         print(
             f"The {band.name} band means volatility at most {band.max_volatility:.0%} a year "
-            f"and a deepest fall of at most {band.max_fall:.0%}."
+            f"and a deepest fall of at most {band.max_fall:.0%}, over the fund's whole history."
         )
     else:
         print(f"The {band.name} band sets no ceiling on volatility or on how far a fund fell.")
@@ -263,37 +457,62 @@ def run_lumpsum(settings, args: argparse.Namespace) -> int:
         print("\n".join(history_note() + report_footer()))
         return 0
 
-    ranked = mf.rank_lumpsum(keep)
-    print(f"\nRanked on three historical measures, each as a percentile of these {len(keep):,}:")
-    for name in mf.LUMPSUM_MEASURES:
-        print(f"  {name:<16} {mf.MEASURE_NOTE[name]}")
-    print("\n".join(common_period_caveat(keep)))
+    ranked = mf.rank_common([got.windowed[s.scheme_code] for s in keep])
+    print(
+        "\nRanked over the shared window on three measures, each as a percentile "
+        f"of these {len(keep):,}:"
+    )
+    for name in mf.COMMON_MEASURES:
+        print(f"  {name:<16} {mf.COMMON_MEASURE_NOTE[name]}")
     print()
+
     for place, r in enumerate(ranked[: args.top], start=1):
-        s = r.stats
-        amc = details.get(s.scheme_code)
-        print(f"{place}. {s.scheme_name}  [{s.scheme_code}, {s.category}]  score {r.score:.2f}")
-        if amc is not None:
-            print(f"  fund house       {amc.amc}")
+        code = r.stats.scheme_code
+        whole = got.full[code]
+        flag, lived = got.flag(code)
         print(
-            "  measures         "
+            f"{place}. {whole.scheme_name}  [{code}, {whole.category}]  "
+            f"score {r.score:.2f}   {flag.upper()}"
+            + (f" ({lived} decline(s) lived through)" if lived else "")
+        )
+        house = got.details.get(code)
+        if house is not None:
+            print(f"  fund house       {house.amc}")
+        print(
+            "  shared window    "
             + " | ".join(
-                f"{name} {_measure_text(name, r.measures[name])} (p{r.percentiles[name] * 100:.0f})"
-                for name in mf.LUMPSUM_MEASURES
+                f"{name} {_common_text(name, r.measures[name])} (p{r.percentiles[name] * 100:.0f})"
+                for name in mf.COMMON_MEASURES
                 if name in r.percentiles
             )
         )
-        print("\n".join(how_sure_lines(s)))
+        print("\n".join(how_sure_lines(whole)))
         print()
+
+    own = mf.rank_lumpsum(keep)
+    changed = [r.stats.scheme_code for r in own[:3]] != [r.stats.scheme_code for r in ranked[:3]]
     print(
-        "The score orders what has already happened. It is not a forecast, not a quality "
-        "rating, and says nothing about what any of these funds will do next."
+        "Judged on each fund's OWN history instead, the top three would be: "
+        + ", ".join(f"{r.stats.scheme_name} [{r.stats.scheme_code}]" for r in own[:3])
+        + ("." if changed else " - the same three.")
     )
+    if changed:
+        print(
+            "  That difference is the point of the shared window: a fund whose record starts "
+            "in a better year is not a better fund."
+        )
+    print(
+        "\nThe score orders what has already happened over one shared window. It is not a "
+        "forecast, not a quality rating, and says nothing about what any of these funds will "
+        "do next."
+    )
+    print(f"\n{mf.UNTESTED_NOTE}")
+    print(mf.OVERLAP_NOTE)
     print("\n".join(history_note() + report_footer()))
     return 0
 
 
-def _measure_text(name: str, value: float | None) -> str:
+def _common_text(name: str, value: float | None) -> str:
     if value is None:
         return "-"
     return f"{value:.2f}" if name == "return_per_fall" else pct(value)
@@ -302,90 +521,111 @@ def _measure_text(name: str, value: float | None) -> str:
 def run_sip(settings, args: argparse.Namespace) -> int:
     """`mf sip`: split a monthly amount, then show what such a SIP came to in the past."""
     band = mf.RISK_BANDS[args.risk]
-    plan = None if args.plan == "any" else args.plan
-    every, details = measured_stats(settings, category=args.category, plan=plan)
-    if not every:
-        print("No NAV history held yet. Run `mf fetch`.", file=sys.stderr)
-        return 1
-    eligible_now, _dropped = mf.eligible(every, band)
-    # A fund with five years cannot be put in a ten-year plan and then asked how such a plan
-    # went: there is no ten-year window to look at. So the horizon raises the history bar.
-    need = max(mf.MIN_RANK_YEARS, float(args.years), args.min_history or 0.0)
-    keep = [s for s in eligible_now if s.years >= need]
+    plan_filter = None if args.plan == "any" else args.plan
+    # A fund with five years cannot be put into a ten-year plan and then asked how such a plan
+    # went: there is no ten-year window to look at. The horizon therefore sets the shared
+    # window, and only funds covering the whole of it are candidates.
+    need = int(math.ceil(max(mf.MIN_RANK_YEARS, float(args.years), args.min_history or 0.0)))
+    got = measure_everything(settings, category=args.category, plan=plan_filter, common_years=need)
     print(
         f"SIP  {rupees(args.amount)} a month for {args.years} years at {band.name} risk"
         + (f", {args.category} funds only" if args.category else "")
-        + (f", {args.plan} plans only" if plan else ", every plan")
+        + (f", {args.plan} plans only" if plan_filter else ", every plan")
     )
-    print(
-        f"{len(every):,} funds measured; {len(eligible_now):,} eligible, and {len(keep):,} of "
-        f"those have the {need:g} years this horizon needs before such a plan can be tested."
-    )
-    if not keep:
+    if not got.full:
+        print("No NAV history held yet. Run `mf fetch`.", file=sys.stderr)
+        return 1
+    print(f"{len(got.full):,} funds measured in {got.seconds:.1f} s.")
+    print("\n".join(window_lines(got.window, len(got.full))))
+    if not got.window.ok:
         print(
-            f"\nNo eligible fund has {need:g} years of NAV, so there is no window in which a "
-            f"{args.years}-year plan can be shown. A shorter --years, a wider --risk band or "
-            "another --category would have some. Nothing is guessed in its place."
+            f"\nSo there is no window in which a {args.years}-year plan can be shown. A "
+            "shorter --years, a wider --risk band or another --category would have one. "
+            "Nothing is guessed in its place."
         )
         print("\n".join(history_note() + report_footer()))
         return 0
-    ranked = mf.rank_lumpsum(keep)
-    amcs = {code: info.amc for code, info in details.items()}
-    picked = mf.diversify(ranked, args.funds, amcs)
-    minimums = dict(args.min_sip_for)
-    plan = mf.split_sip(picked, args.amount, minimums=minimums, step=mf.SIP_STEP)
-    if not plan.slices:
-        print("\n" + "\n".join(plan.notes))
+
+    pool = [got.full[code] for code in sorted(got.windowed)]
+    keep, _dropped = mf.eligible(pool, band)
+    print(f"{len(keep):,} of the {len(pool):,} are inside the {band.name} band and can be picked.")
+    if not keep:
+        print("\nNo fund clears both gates. Try a wider band or a different category.")
         print("\n".join(history_note() + report_footer()))
         return 0
 
-    print(f"\n{len(plan.slices)} funds, at most one per fund house, categories spread first:")
-    for slice_ in plan.slices:
-        house = details.get(slice_.scheme_code)
+    ranked = mf.rank_common([got.windowed[s.scheme_code] for s in keep])
+    amcs = {code: info.amc for code, info in got.details.items()}
+    picked = mf.diversify(ranked, args.funds, amcs)
+    sip_plan = mf.split_sip(picked, args.amount, minimums=dict(args.min_sip_for), step=mf.SIP_STEP)
+    if not sip_plan.slices:
+        print("\n" + "\n".join(sip_plan.notes))
+        print("\n".join(history_note() + report_footer()))
+        return 0
+
+    print(f"\n{len(sip_plan.slices)} funds, at most one per fund house, categories spread first:")
+    for slice_ in sip_plan.slices:
+        house = got.details.get(slice_.scheme_code)
+        flag, _lived = got.flag(slice_.scheme_code)
         print(
             f"  {rupees(slice_.monthly):>9} a month  {slice_.scheme_name} "
             f"[{slice_.scheme_code}, {slice_.category}]"
             + (f"  - {house.amc}" if house is not None else "")
+            + f"  [{flag}]"
         )
-    for note in plan.notes:
+    for note in sip_plan.notes:
         print(f"  note: {note}")
     print(f"  {mf.MIN_SIP_NOTE}")
 
-    series = named_series(settings, [s.scheme_code for s in plan.slices])
-    runs = [(s.monthly, series[s.scheme_code]) for s in plan.slices if s.scheme_code in series]
-    outcome = mf.sip_windows(runs, args.years)
+    series = named_series(settings, [s.scheme_code for s in sip_plan.slices])
+    runs = [(s.monthly, series[s.scheme_code]) for s in sip_plan.slices if s.scheme_code in series]
+    overlapping = mf.sip_windows(runs, args.years)
+    independent = mf.sip_windows(runs, args.years, step_months=args.years * 12)
     print("\nWhat this plan came to, started on the same day of every month the")
     print("history allows:")
-    if outcome.windows == 0:
+    if overlapping.windows == 0:
         print(
             f"  no complete {args.years}-year window: the funds' shared history is shorter "
             "than that. A shorter --years, or funds with more history, would have some."
         )
     else:
         print(
-            f"  {outcome.windows} windows, {outcome.first_start} to {outcome.last_start}; "
-            f"{rupees(outcome.invested)} paid in over {args.years * 12} instalments each time"
+            f"  {overlapping.windows} overlapping windows, {overlapping.first_start} to "
+            f"{overlapping.last_start}; {rupees(overlapping.invested)} paid in over "
+            f"{args.years * 12} instalments each time"
         )
-        print(distribution_line("final value", outcome.value, fmt=rupees))
-        print(distribution_line("multiple of money", outcome.multiple, fmt=multiple))
-        print(distribution_line("annualised (XIRR)", outcome.annualised))
-        if outcome.windows < MIN_HONEST_WINDOWS:
+        print(distribution_line("final value", overlapping.value, fmt=rupees))
+        print(distribution_line("multiple of money", overlapping.multiple, fmt=multiple))
+        print(distribution_line("annualised (XIRR)", overlapping.annualised))
+        if overlapping.windows < MIN_HONEST_WINDOWS:
             print(
-                f"  CAUTION: {outcome.windows} window(s) is too few to call a spread. These "
-                "funds' shared history barely covers the horizon; ask for more history with "
-                "--min-history, or a shorter --years."
+                f"  CAUTION: {overlapping.windows} window(s) is too few to call a spread. "
+                "These funds' shared history barely covers the horizon; ask for more history "
+                "with --min-history, or a shorter --years."
             )
-        print(
-            "  The windows OVERLAP: starts a month apart share all but one instalment, so "
-            "they are not independent tries and the spread understates how different the "
-            f"next {args.years} years could be."
-        )
+        if independent.windows:
+            print(
+                f"\n  The same plan over {independent.windows} NON-OVERLAPPING window(s), "
+                f"{independent.first_start} to {independent.last_start} - each one a stretch "
+                "of market the others do not touch:"
+            )
+            print(distribution_line("final value", independent.value, fmt=rupees))
+            print(distribution_line("multiple of money", independent.multiple, fmt=multiple))
+            print(distribution_line("annualised (XIRR)", independent.annualised))
+        else:
+            print(
+                f"\n  There is not room for even two {args.years}-year windows side by side "
+                "in this history, so there is no independent spread to show. Read the "
+                "overlapping one as a single sample, not a range."
+            )
+        print(f"  {mf.OVERLAP_NOTE}")
         print(
             "  The gap between worst and best is the answer to 'how sure': the same plan, "
-            "started in different months, ended that far apart."
+            "started at different times, ended that far apart."
         )
     print()
     print("\n".join(mf.stop_rule_lines(years=args.years, goal=args.goal)))
+    print(f"\n{mf.UNTESTED_NOTE}")
     print("\n".join(history_note() + report_footer()))
     return 0
 
@@ -548,6 +788,13 @@ def build_parser() -> argparse.ArgumentParser:
     lump.add_argument("--category", choices=mf.UNIVERSE_CATEGORIES)
     lump.add_argument("--top", type=int, default=5, help="how many funds to show in full")
     lump.add_argument("--plan", choices=PLANS, default="direct", help=PLAN_HELP)
+    lump.add_argument(
+        "--common-years",
+        type=int,
+        help="rank over the last N years instead of the longest shared window, and "
+        "drop the funds that do not cover it (the way to get a window with a crash "
+        "in it)",
+    )
 
     sip = sub.add_parser("sip", help="split a monthly amount and show what such a SIP did")
     sip.add_argument("--amount", type=float, required=True, help="a month, in rupees")
