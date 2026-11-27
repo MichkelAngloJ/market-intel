@@ -211,6 +211,12 @@ Decision 2026-11-22:
   themselves, and every spread is reported over non-overlapping windows as well as
   overlapping ones. Nothing stored, no migration. The finding this surfaced: the default
   shared window on the data held contains no decline at all, which the report states.
+- S6d (done): the DEFAULT lumpsum window must contain a real fall. It is anchored on the most
+  recent decline of 20% or more in the market reference (today, 2020) and stretched back as far
+  as every ranked fund allows; funds that were not reporting through it are named as untested
+  in a downturn rather than ranked or dropped. `--common-years N` and `--allow-calm-window`
+  remain as deliberate escapes, and a reference with no decline in it falls back to the longest
+  shared window with a loud notice rather than failing. Nothing stored, no migration.
 - HONESTY (SEBI): evidence only. No predicted returns, no profit or accuracy claims, no
   promise that a fall will be recovered. Every statistics output carries "Past performance is
   not indicative of future results; information, not investment advice" and the survivorship

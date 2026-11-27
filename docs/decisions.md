@@ -438,3 +438,15 @@
   figure corrects.
 - Reason (owner): I want the lumpsum ranking safe to use for real money - funds compared fairly,
   and clear which ones have never been through a fall.
+
+## 2026-11-27 - Default the lumpsum ranking to a window that contains a real fall
+- Decision: The default lumpsum common window must contain at least one >= 20% market decline
+  (today, 2020); funds whose history covers it are ranked, the rest are shown "untested in a
+  downturn". --common-years and an explicit calm-window override remain; if no fall exists in the
+  reference the ranking falls back to the longest shared window with a loud notice. Nothing stored.
+- Concern (planner): S6c's automatic window (2021->2026) held no fall, so the default ranked bull-
+  run climbers, not fall-resistant funds - the original problem from the other side. Anchoring the
+  default to a window with a real decline fixes it without the owner remembering a flag; a fixed
+  "10 years" would drift, so the rule is driven by the fall itself.
+- Reason (owner): I want the default ranking safe for real money - compared over a period that
+  actually includes a fall, not just a rising market.

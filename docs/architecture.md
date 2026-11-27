@@ -1300,10 +1300,47 @@ stretch of market exactly once. Neither is the safe one to read - there are few 
 windows, and a fall landing across a boundary can be split between two of them and show up in
 neither - so both are printed and the report says why.
 
-**What this exposed.** With the data held, the automatic shared window is about five years and
-contains NO decline at all, so by default every fund is compared fairly but on a market that
-only rose. The report says exactly that and points at `--common-years`, which is the lever that
-buys a window with 2020 in it.
+**What this exposed, and what S6d did about it.** The automatic shared window came out at about
+five years (2021-2026) and contained NO decline at all. Comparing funds fairly over a market
+that only rose answers "who climbed fastest in a bull run", not "who holds up in a fall" - the
+original problem seen from the other side. So the DEFAULT window now has to contain a real
+decline.
+
+The rule, exactly as implemented:
+
+1. Drop funds that have stopped reporting, then keep those with at least five years of NAV.
+   Eligibility is the minimum-history rule alone, so the window does not move when a risk
+   ceiling changes.
+2. Take the MOST RECENT decline of 20% or more in the market reference - today, the 37% fall
+   that peaked on 2020-01-24 and bottomed on 2020-03-23. A fixed number of years would drift
+   away from the fall as time passes, so the rule follows the fall itself.
+3. Keep the funds that were already reporting at that peak AND still reporting at that bottom.
+   Those are the funds that can be ranked.
+4. The window is the longest one all of THOSE funds cover: the latest of their start dates to
+   the earliest of their end dates. It contains the decline by construction, and it reaches as
+   far back before the decline as the field allows.
+
+On the data held that gives 2020-01-03 to 2026-11-25, 6.9 years, with 387 funds ranked. The 75
+funds that have five years but were not there for the fall are NAMED on the report as untested
+in a downturn, with their start dates - not quietly dropped, because a fund missing from a
+ranking is itself information.
+
+Three escapes, all of which say on the report which window was used and why:
+
+| Ask | What happens |
+|---|---|
+| (nothing) | anchored on the most recent fall, as above |
+| `--common-years N` | exactly the last N years, and a warning if that window holds no fall |
+| `--allow-calm-window` | the longest shared window whatever it holds - the widest field, knowingly |
+
+If the reference holds no decline at all, or no eligible fund was reporting through the one it
+has, the ranking does NOT fail or return nothing. It falls back to the longest shared window
+and prints a loud notice saying the ranking is over a market that only rose and says nothing
+about who holds up in a decline.
+
+`mf sip` is unchanged: its window is the horizon the owner asked for, so there is nothing to
+anchor - a plan has to be measured over the span it will actually run for.
+
 
 ## Models, evaluation, costs and the registry
 

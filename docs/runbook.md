@@ -655,11 +655,26 @@ own history. The report states the window, who covers it and who was dropped:
 | A window long enough to contain a crash | `... lumpsum --amount 500000 --risk medium --common-years 10` |
 | The same for a plan | `... sip --amount 25000 --years 7 --risk medium --min-history 12` |
 
-**Why the default window is short.** It is the longest stretch EVERY eligible fund covers, so
-the most recently launched eligible fund sets it - about five years on the data held, which
-contains no decline of 20% or more. The report says so in as many words. `--common-years 10`
-goes back far enough to include 2020 and drops the funds that cannot cover it; the count of
-funds dropped is printed, because a smaller, older field is the price of a fairer comparison.
+**The default window contains a real fall (S6d).** It is anchored on the most recent decline
+of 20% or more in the market reference - today the 37% fall of early 2020 - and then stretched
+back as far as every ranked fund allows. On the data held that is 2020-01-03 to 2026-11-25,
+with 387 of 1,128 funds ranked. The point is that the ranking reflects how funds behaved
+through a decline, not who climbed fastest in a rising market.
+
+**The funds that were not there for it are named, not dropped.** About 75 of them have the
+five years but started after the fall. They are listed under the table as `untested in a
+downturn`, with their start dates. That is not a verdict on any of them: their record simply
+does not cover the same market, so placing them beside the ranked funds would be a comparison
+the data cannot make. `mf stats --scheme <code>` shows what each one's own history does say.
+
+**The two escapes.** `--common-years N` uses exactly the last N years and warns if that window
+holds no fall. `--allow-calm-window` goes back to the longest shared window whatever it holds,
+which gives the widest field - ask for it knowingly, because a window with no decline in it
+says nothing about holding up in one. Both print which window was used and why.
+
+**If no fall can be found at all** the command does not fail: it falls back to the longest
+shared window and prints a loud `!! NO FALL IN THE WINDOW` notice. Read any ranking carrying
+that notice as "who climbed fastest", nothing more.
 
 **The flag beside each fund.** `SURVIVED A FALL` means the fund was already reporting when a
 broad reference peaked and still reporting at the bottom. `UNTESTED IN A DOWNTURN` means there
