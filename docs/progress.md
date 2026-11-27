@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-27, HEAD d35852c. Updated at the end of every task (see
+Last updated: 2026-11-27, HEAD 05e51c0. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -20,9 +20,10 @@ Last updated: 2026-11-27, HEAD d35852c. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S6b (mutual fund decisions: lumpsum, SIP and keep-or-exit) in progress. S6a review
-  PASSED (planner, 2026-11-27). Next after S6b: planner review. 0.11 (remove the testing-laptop dependency) stays
-  planned for not before 2026-12-03.
+- Now: S6b (mutual fund decisions: lumpsum, SIP and keep-or-exit) done, awaiting planner
+  review. S6a review PASSED (planner, 2026-11-27). The mutual-fund priority is complete:
+  S6a is the data and the evidence, S6b the decisions. 0.11 (remove the testing-laptop
+  dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
   News RSS for the watchlist, polite rate); 1.3 Upstox login and token; 1.4 daily candles
@@ -193,6 +194,7 @@ Last updated: 2026-11-27, HEAD d35852c. Updated at the end of every task (see
 | S5i-b | done 2026-11-26 (HEAD 23dde7a) | passed (planner, 2026-11-26) | Labels v3 (ATR barriers held 30 / 60 bars or to the close) with the ATR invariant checked separately; `intraday precision` (probability deciles and the top 10/5/1% most-confident signals with their net result after costs); plain-percentage reporting against `no_trading`. BOTH questions answered NO: holding longer does not beat the fee, and no confidence band is profitable |
 | S5i-c | done 2026-11-26 (HEAD 6874630) | awaiting planner review | `movers100` (107 liquid, volatile NSE stocks incl. the owner's 7 picks) chosen from the daily candles; 47.8M 1-minute rows; features and labels v2; isotonic calibration fitted from EARLIER months only; a probability cache. Rules still have NO gross edge; the model's EV gate pays over the walk-forward but decays to negative by 2026 |
 | S6a | done 2026-11-27 (HEAD d35852c) | awaiting planner review | Mutual funds, the data and evidence half. Official AMFI NAV (NAVAll.txt and the 90-day history report, both verified live and parsed by their own header because their column orders differ); migration 0011 (mf_schemes, mf_nav, mf_nav_chunks); a resumable, polite backfill; and a per-fund stats engine (rolling returns, CAGR, volatility, drawdown, fall-and-recovery distributions, category percentiles) with a disclaimer and a survivorship note on every output |
+| S6b | done 2026-11-27 (HEAD 05e51c0) | awaiting planner review | Mutual funds, the decision half, offline and storing nothing. `mf lumpsum` (a ranking on three historical measures at once, inside a measured risk band), `mf sip` (a split across fund houses with each scheme's minimum, and the best/median/worst of that exact plan over every rolling window, with a plain stop rule) and `mf keep-or-exit` (what this fund and its whole category did after falls of the same depth, against the owner's horizon). The minimum-history rule - rank at 5 years, flag 3 to 5, refuse under 3 - is shared by all three and printed on every output. No migration |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -213,6 +215,11 @@ Last updated: 2026-11-27, HEAD d35852c. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S6b (2026-11-27): local databases unchanged, still at 0011. S6b computes on demand and
+  stores nothing, so there is no migration and no new table. The universe used: 2,255 funds,
+  of which 1,128 are Direct plans; 938 have the five years the ranking needs. A whole-universe
+  `mf lumpsum` takes about 36 seconds, a 10-year `mf sip` about 40, and `mf keep-or-exit` with
+  the category comparison about 50.
 - S6a (2026-11-27): local databases at 0011 (migration applied after CI and compose-smoke
   were green at 8aab9e6). AMFI scheme master: 14,245 schemes on 2026-11-26, of which the
   universe (open-ended equity/hybrid/index on the GROWTH option) is 2,255 - equity 1,133,
@@ -399,6 +406,21 @@ Last updated: 2026-11-27, HEAD d35852c. Updated at the end of every task (see
   calibrate it; the walk-forward error collapsed to 0.000 while the holdout reached only
   0.007. Each month is now calibrated from strictly earlier months. It changed the headline
   by only 0.05 bps here, but the next model it is used on may not be so forgiving.
+- An AMFI scheme code is a plan AND an option, so every fund is in the universe twice,
+  Direct and Regular, with nearly the same NAV. `mf lumpsum` and `mf sip` therefore rank ONE
+  plan at a time and default to Direct; anything else built on this universe has to make the
+  same choice or it will count the same fund twice.
+- Five years of history is not the SAME five years. 2020 was the bottom of a crash, so a fund
+  whose NAV begins in mid-2020 has a flattering worst-case and can top a ranking without ever
+  having been through a fall. The minimum-history rule cannot catch this; `mf lumpsum` prints
+  the span of start dates and each fund's own history line instead. A like-for-like ranking
+  over a COMMON period is the honest fix and is not built.
+- Rolling windows overlap almost completely: SIP starts a month apart share all but one
+  instalment, so 46 windows are not 46 independent tries. Every report that shows a window
+  spread has to say so, or the spread reads as more certain than it is.
+- The minimum SIP is NOT in AMFI's files. It is an input with a 500 default and a printed
+  warning; if the owner ever wants it to be right per scheme, it has to come from somewhere
+  else (the scheme information documents, or by hand).
 - AMFI serves at most 90 days of NAV history per request and takes 60-110 seconds to build
   each ~70 MB chunk, so a 15-year backfill is about 65 requests and a little over two hours.
   It is resumable in two places (the raw file and the `mf_nav_chunks` row), so an interrupted
