@@ -624,8 +624,9 @@ ranked, three to five years is flagged `short history` and never ranked, and und
 is `too new to judge`. A fund missing from a ranking is information, which is why the rule is
 on the page rather than in the code only.
 
-**`lumpsum` takes about a minute** over the whole universe, because it measures all 2,255
-funds before it ranks any. `--category` cuts that to the one group.
+**`lumpsum` takes about half a minute** over the whole universe, because it measures every
+fund before it ranks any: 1,128 series with the Direct default, 2,255 with `--plan any`.
+`--category` cuts that again - the index funds alone take about eight seconds.
 
 **`sip` needs funds that cover the horizon.** A seven-year plan is only shown from funds with
 seven years of NAV, because a shorter history has no seven-year window to show. `--min-history`
