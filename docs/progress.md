@@ -20,9 +20,8 @@ Last updated: 2026-11-27, HEAD d35852c. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S6a (mutual funds: AMFI NAV data and the "how sure" stats engine) done, awaiting
-  planner review. Next: S6b (the lumpsum pick, the SIP plan with each scheme's own minimums,
-  and keep-or-exit flags), built on S6a. 0.11 (remove the testing-laptop dependency) stays
+- Now: S6b (mutual fund decisions: lumpsum, SIP and keep-or-exit) in progress. S6a review
+  PASSED (planner, 2026-11-27). Next after S6b: planner review. 0.11 (remove the testing-laptop dependency) stays
   planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
@@ -48,6 +47,14 @@ Last updated: 2026-11-27, HEAD d35852c. Updated at the end of every task (see
   limits 2 connections, full mode 2000 instruments; minute and hour candles from Jan 2022 (1
   to 15 minute intervals: at most 1 month per request); daily from Jan 2000 (1 decade per
   request).
+- S6a review (planner, 2026-11-27): passed. Verified: CI and compose-smoke green at d35852c;
+  migration 0011 present; no NAV data, scheme lists or results tracked; no old test weakened
+  (46 new tests). Four bugs were found and fixed inside the task: three from this project's
+  autocommit connections (a loader that committed for its caller, a temp table dropped the
+  instant it was created, a server-side cursor outside a transaction) and a resume keyed on
+  chunk boundaries that re-downloaded a finished backfill when the end date moved by a day.
+  Minimum-history rule set for S6b: rank only funds with at least 5 years, flag 3-5 years as
+  short history, and call anything under 3 years too new to judge.
 - S5i review (planner, 2026-11-25): passed. Verified: CI and compose-smoke green at the tip;
   migration 0010 present; decisions appended; no data, model or log files tracked. The removed
   test in tests/test_intraday_candles.py (the old per-writer replace retry) was superseded by
