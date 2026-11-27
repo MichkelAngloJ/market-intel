@@ -287,13 +287,25 @@ jobs:
         env:
           ALERT_DRY_RUN: "true"
         run: |
-          uv run python -m market_intel.mf lumpsum --amount 100000 --risk high --top 1             | tee mf_lumpsum.txt
+          uv run python -m market_intel.mf lumpsum --amount 100000 --risk high --top 5             | tee mf_lumpsum.txt
           grep -q "too new to judge" mf_lumpsum.txt
           grep -q "Survivorship bias" mf_lumpsum.txt
           grep -q "not investment advice" mf_lumpsum.txt
-          uv run python -m market_intel.mf sip --amount 3000 --years 5 --risk high --funds 2             | tee mf_sip.txt
+          # S6c: one shared window, the fall flag both ways, and both kinds of spread.
+          grep -q "Shared window" mf_lumpsum.txt
+          grep -q "SURVIVED A FALL" mf_lumpsum.txt
+          grep -q "UNTESTED IN A DOWNTURN" mf_lumpsum.txt
+          grep -q "independent" mf_lumpsum.txt
+          # The default window starts after the modelled crash, so asking for a longer one
+          # has to drop the fund that joined late rather than shorten itself.
+          uv run python -m market_intel.mf lumpsum --amount 100000 --risk high             --common-years 8 | tee mf_lump8.txt
+          grep -q "the last 8 years, as asked" mf_lump8.txt
+          grep -q "do not cover this window" mf_lump8.txt
+          grep -q "fall inside the shared window" mf_lump8.txt
+          uv run python -m market_intel.mf sip --amount 3000 --years 2 --risk high --funds 2             | tee mf_sip.txt
           grep -q "STOP the SIP when" mf_sip.txt
           grep -q "annualised (XIRR)" mf_sip.txt
+          grep -q "NON-OVERLAPPING" mf_sip.txt
           grep -q "not investment advice" mf_sip.txt
           uv run python -m market_intel.mf keep-or-exit --fund 9100001 --invested 100000             --current 80000 --horizon-years 3 | tee mf_keep.txt
           grep -q "Keep or exit" mf_keep.txt

@@ -81,7 +81,7 @@ def fake_history(start: date, days: int) -> str:
     return head + "\n".join(rows) + "\n"
 
 
-def fake_history_with_a_fall(start: date, days: int) -> str:
+def fake_history_with_a_fall(start: date, days: int, late_start: int = 0) -> str:
     """Six years of rising NAV with one deliberate 30% fall and recovery in the middle.
 
     The S6b commands need enough history to pass the five-year rule and something real to
@@ -108,19 +108,23 @@ def fake_history_with_a_fall(start: date, days: int) -> str:
             f"{EQUITY};ZZ Fake Large Cap Fund - Direct - Growth;Direct Plan;Growth;"
             f"INFZZZ000001;-;{nav(i, 100.0):.4f};{d}"
         )
+        if i < late_start:
+            continue  # the index fund does not exist yet: it is the late starter
         rows.append(
             f"{INDEX};ZZ Fake Nifty 50 Index Fund - Direct - Growth;Direct Plan;Growth;"
-            f"INFZZZ000002;-;{nav(i, 50.0):.4f};{d}"
+            f"INFZZZ000002;-;{nav(i - late_start, 50.0):.4f};{d}"
         )
     return head + "\n".join(rows) + "\n"
 
 
-def load_fake(conn, tmp_path, days: int, start: date = date(2019, 1, 1)) -> None:
+def load_fake(
+    conn, tmp_path, days: int, start: date = date(2019, 1, 1), late_start: int = 0
+) -> None:
     master = tmp_path / "NAVAll.txt"
     master.write_text(fake_master(), encoding="utf-8")
     mf_fetch.store_schemes(conn, mf_fetch.read_schemes(master), seen=start)
     history = tmp_path / "chunk.txt"
-    history.write_text(fake_history_with_a_fall(start, days), encoding="utf-8")
+    history.write_text(fake_history_with_a_fall(start, days, late_start), encoding="utf-8")
     mf_fetch.store_navs(conn, mf_fetch.nav_rows_for(history, mf_fetch.universe_codes(conn)))
 
 
@@ -316,3 +320,80 @@ def test_only_one_plan_is_ranked_so_a_fund_cannot_fill_a_table_twice(conn, tmp_p
     assert set(direct) == {EQUITY, INDEX}  # the fake master is Direct Plan throughout
     assert regular == {}
     assert direct[EQUITY].plan == "direct"
+
+
+# --- the shared window, against the database (S6c) ------------------------------------------
+def test_nav_spans_come_from_the_dates_actually_held(conn, tmp_path):
+    load_fake(conn, tmp_path, days=2_600)
+    spans = {s.scheme_code: s for s in mf_fetch.nav_spans(conn, [EQUITY, INDEX, DEBT])}
+
+    assert set(spans) == {EQUITY, INDEX}  # the debt fund has no NAV stored at all
+    assert spans[EQUITY].first == date(2019, 1, 1)
+    assert spans[EQUITY].last == date(2019, 1, 1) + timedelta(days=2_599)
+    assert spans[EQUITY].years == pytest.approx(2_599 / 365.25, abs=0.01)
+
+
+def test_the_shared_window_is_set_by_the_latest_starting_fund_that_can_be_ranked(conn, tmp_path):
+    # The index fund joins a thousand days late but still has more than five years, so it is
+    # eligible and it is what the window has to shrink to.
+    load_fake(conn, tmp_path, days=3_300, late_start=1_000)
+    # Explicit codes: a developer's database holds the real universe too, and a test that
+    # says 'every fund' would be measuring whatever happens to be loaded.
+    spans = mf_fetch.nav_spans(conn, [EQUITY, INDEX])
+    window, covering = mf.common_window(spans)
+
+    assert covering == [EQUITY, INDEX]
+    assert window.start == date(2019, 1, 1) + timedelta(days=1_000)
+    assert window.end == date(2019, 1, 1) + timedelta(days=3_299)
+    assert window.years == pytest.approx(2_299 / 365.25, abs=0.01)
+
+
+def test_a_longer_window_drops_the_late_starter_rather_than_shortening_itself(conn, tmp_path):
+    load_fake(conn, tmp_path, days=3_300, late_start=1_000)
+    window, covering = mf.common_window(mf_fetch.nav_spans(conn, [EQUITY, INDEX]), years=8)
+
+    assert covering == [EQUITY]  # only the fund that was there for all eight years
+    assert window.too_short == 1
+    assert window.years == pytest.approx(8.0, abs=0.01)
+
+
+def test_the_window_slice_is_what_the_headline_ranking_measures(conn, tmp_path):
+    load_fake(conn, tmp_path, days=3_300, late_start=1_000)
+    spans = mf_fetch.nav_spans(conn, [EQUITY, INDEX])
+    window, covering = mf.common_window(spans)
+    assert window.start is not None and window.end is not None
+
+    ranked = []
+    for code, rows in mf_fetch.iter_series(conn, covering):
+        part = mf.slice_series(mf.Series.build(rows), window.start, window.end)
+        assert part.start == window.start
+        assert part.end == window.end
+        ranked.append(
+            mf.fund_stats(
+                code,
+                f"fund {code}",
+                "equity",
+                zip(part.dates, part.navs, strict=True),
+                years=(1,),
+                levels=(),
+            )
+        )
+    order = mf.rank_common(ranked)
+    assert len(order) == 2
+    assert [r.stats.scheme_code for r in order] == [
+        r.stats.scheme_code for r in mf.rank_common(list(reversed(ranked)))
+    ]
+
+
+def test_a_reference_built_from_the_database_finds_the_fall_written_into_it(conn, tmp_path):
+    load_fake(conn, tmp_path, days=2_600)
+    builder = mf.Reference()
+    for _code, rows in mf_fetch.iter_series(conn, [EQUITY, INDEX]):
+        builder.add(mf.Series.build(rows))
+    index = builder.build(min_funds=2)  # the fake data only has two funds in the universe
+
+    (fall,) = mf.reference_falls(index)
+    assert fall.depth > mf.REFERENCE_FALL
+    assert fall.trough_date is not None
+    # Both fake funds were there for the whole of it.
+    assert mf.falls_lived_through(index.start, index.end, [fall]) == 1
