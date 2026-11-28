@@ -682,8 +682,10 @@ def test_the_anchored_default_clause_is_printed_for_lumpsum_and_not_for_sip():
 
     assert "The default window is anchored on one." in lumpsum
     assert "default window" not in sip
-    # Everything else about the two is word for word the same.
-    assert sip.split("  ")[0] in lumpsum
+    # Everything else about the two is word for word the same: same sentence, same number,
+    # only the marker in front of it differs (S6f).
+    assert mf.NO_FALL_SENTENCE in lumpsum
+    assert mf.NO_FALL_SENTENCE in sip
 
 
 def test_each_command_is_told_which_flag_reaches_further_back():
@@ -777,7 +779,9 @@ def test_both_commands_print_the_signal_through_the_same_report_helper():
             window, 370, [CRASH], default_is_anchored=False, escape_flag="--min-history"
         )
     )
-    assert "NO FALL IN THIS WINDOW" in lumpsum and "NO FALL IN THIS WINDOW" in sip
+    assert mf.NO_FALL_SENTENCE in lumpsum and mf.NO_FALL_SENTENCE in sip
+    assert f"{mf.LOUD} NO FALL IN THIS WINDOW" in lumpsum
+    assert f"{mf.CALM} no fall in this window" in sip
     assert "--common-years 7" in lumpsum
     assert "--min-history 7" in sip
     assert "The default window is anchored on one." in lumpsum
@@ -811,3 +815,105 @@ def test_a_recent_fall_shortens_the_window_but_the_five_year_rule_floors_it():
     evidence = mf.window_evidence(collapsed, [just_now])
     assert evidence.below_floor
     assert "LOW CONFIDENCE" in " ".join(evidence.warnings())
+
+
+# --- the notice's volume follows how surprising the state is (S6f) --------------------------
+def no_fall_evidence() -> mf.WindowEvidence:
+    """A window holding no fall, above the floor: the only thing that varies is the path."""
+    return evidence_for(date(2021, 11, 25), falls=[CRASH])
+
+
+def test_a_plan_measured_over_its_own_horizon_is_told_calmly():
+    """The expected state. Shouting it every run teaches the owner to skip the shouting."""
+    lines = no_fall_evidence().warnings(default_is_anchored=False, escape_flag="--min-history")
+    assert lines[0].startswith(mf.CALM)
+    assert mf.LOUD not in lines[0]
+    assert "no fall in this window" in lines[0]
+
+
+def test_walking_away_from_a_fall_anchored_default_is_still_loud():
+    lines = no_fall_evidence().warnings()
+    assert lines[0].startswith(mf.LOUD)
+    assert "NO FALL IN THIS WINDOW" in lines[0]
+
+
+def test_the_two_volumes_say_exactly_the_same_thing():
+    calm = no_fall_evidence().warnings(default_is_anchored=False)[0]
+    loud = no_fall_evidence().warnings()[0]
+    assert calm != loud
+    assert mf.NO_FALL_SENTENCE in calm
+    assert mf.NO_FALL_SENTENCE in loud
+    # Strip the marker and the lumpsum-only clause and nothing else is left over.
+    assert calm.removeprefix(f"{mf.CALM} no fall in this window: ") == mf.NO_FALL_SENTENCE
+    assert loud.removeprefix(f"{mf.LOUD} NO FALL IN THIS WINDOW: ") == (
+        f"{mf.NO_FALL_SENTENCE} The default window is anchored on one."
+    )
+
+
+def test_the_escape_hint_is_unchanged_by_the_volume():
+    calm = no_fall_evidence().warnings(default_is_anchored=False, escape_flag="--min-history")
+    loud = no_fall_evidence().warnings(escape_flag="--min-history")
+    assert len(calm) == len(loud) == 2
+    assert calm[-1].strip() == loud[-1].strip()
+    assert "--min-history 7" in calm[-1]
+
+
+def test_the_hint_is_indented_under_whichever_notice_it_belongs_to():
+    calm = no_fall_evidence().warnings(default_is_anchored=False)[-1]
+    loud = no_fall_evidence().warnings()[-1]
+    assert len(calm) - len(calm.lstrip()) == len(mf.CALM) + 1
+    assert len(loud) - len(loud.lstrip()) == len(mf.LOUD) + 1
+
+
+def test_the_low_confidence_floor_is_loud_on_both_paths():
+    """Out of scope for the volume rule: too little market is too little market."""
+    short = evidence_for(date(2024, 11, 25), fall=CRASH, falls=[CRASH])
+    for anchored in (True, False):
+        floor_line = next(
+            line
+            for line in short.warnings(default_is_anchored=anchored)
+            if "LOW CONFIDENCE" in line
+        )
+        assert floor_line.startswith(mf.LOUD)
+        assert not floor_line.startswith(mf.CALM)
+
+
+def test_a_calm_notice_and_a_loud_floor_together_keep_their_own_volumes():
+    both = evidence_for(date(2024, 11, 25), falls=[CRASH])
+    lines = both.warnings(default_is_anchored=False, escape_flag="--min-history")
+    assert lines[0].startswith(mf.CALM), "the expected no-fall state stays calm"
+    assert lines[1].startswith(mf.LOUD), "the floor does not"
+    # The hint sits under the LAST notice, which is the loud one.
+    assert len(lines[2]) - len(lines[2].lstrip()) == len(mf.LOUD) + 1
+
+
+def test_the_loud_fallback_is_never_quietened():
+    """The anchored default TRIED and could not find a fall: always a surprise."""
+    reason = "no decline of 20% or more exists anywhere in the market reference"
+    evidence = evidence_for(date(2015, 1, 1), reason=reason)
+    for anchored in (True, False):
+        assert evidence.warnings(default_is_anchored=anchored)[0].startswith(mf.LOUD)
+
+
+def test_a_window_that_is_fine_stays_silent_at_either_volume():
+    sound = evidence_for(date(2020, 1, 3), fall=CRASH, falls=[OLDER_CRASH, CRASH])
+    assert sound.warnings() == []
+    assert sound.warnings(default_is_anchored=False) == []
+
+
+def test_there_are_exactly_two_volumes_and_they_are_distinguishable():
+    assert mf.LOUD != mf.CALM
+    assert mf.LOUD == "!!"
+    assert mf.CALM == "note:"
+
+
+def test_the_report_carries_the_calm_notice_through_to_the_sip_command():
+    window = mf.CommonWindow(start=date(2021, 11, 25), end=END, funds=47, asked_years=5)
+    sip = "\n".join(
+        mf_cli.window_lines(
+            window, 370, [CRASH], default_is_anchored=False, escape_flag="--min-history"
+        )
+    )
+    assert f"{mf.CALM} no fall in this window" in sip
+    assert f"{mf.LOUD} NO FALL" not in sip
+    assert "--min-history 7" in sip

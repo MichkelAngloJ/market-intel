@@ -1474,6 +1474,17 @@ def rank_common(stats: Sequence[FundStats]) -> list[Ranked]:
 #   - it is shorter than the floor below which a ranking is mostly noise.
 CONFIDENCE_FLOOR_YEARS = MIN_SHOW_YEARS
 
+# Two volumes, and nothing in between. LOUD is for a state the owner would not expect;
+# CALM is for one they would. The WORDS after the marker are the same either way: this is
+# about how hard the report knocks, never about what it says.
+LOUD = "!!"
+CALM = "note:"
+
+NO_FALL_SENTENCE = (
+    f"it contains no decline of {REFERENCE_FALL:.0%} or more, so it says who climbed "
+    "fastest and nothing about who holds up in a fall."
+)
+
 
 def _years_back_to(end: date, target: date) -> int:
     """The smallest whole N for which ``end`` minus N years is on or before ``target``.
@@ -1519,30 +1530,42 @@ class WindowEvidence:
         ``default_is_anchored`` is the one thing the two commands genuinely differ on:
         `mf lumpsum` has a fall-anchored default to point the owner back to, `mf sip` does
         not, because a plan has to be measured over the span it will actually run for.
+
+        It also sets the VOLUME of the no-fall notice, because the same fact is ordinary in
+        one place and alarming in the other. A plan measured over its own horizon will hold
+        no fall most of the time - shouting about it every run teaches the owner to skip the
+        shouting, and the next notice that matters goes with it. Walking away from a
+        fall-anchored default that was there for the asking is genuinely unusual, so that one
+        stays loud. The words are identical either way; only the marker changes.
         """
         out: list[str] = []
+        indent = len(LOUD) + 1
         if self.no_fall_reason:
+            # The anchored default TRIED and could not find a fall: always surprising.
             out.append(
-                f"!! NO FALL IN THE WINDOW: {self.no_fall_reason}. This ranking is over a "
-                "market that only rose, so it says who climbed fastest and NOTHING about "
+                f"{LOUD} NO FALL IN THE WINDOW: {self.no_fall_reason}. This ranking is over "
+                "a market that only rose, so it says who climbed fastest and NOTHING about "
                 "who holds up in a decline. Read it that way."
             )
         elif not self.holds_fall:
-            line = (
-                f"!! NO FALL IN THIS WINDOW: it contains no decline of {REFERENCE_FALL:.0%} "
-                "or more, so it says who climbed fastest and nothing about who holds up in "
-                "a fall."
-            )
             if default_is_anchored:
-                line += " The default window is anchored on one."
-            out.append(line)
+                out.append(
+                    f"{LOUD} NO FALL IN THIS WINDOW: {NO_FALL_SENTENCE} The default window "
+                    "is anchored on one."
+                )
+            else:
+                out.append(f"{CALM} no fall in this window: {NO_FALL_SENTENCE}")
+                indent = len(CALM) + 1
         if self.below_floor:
+            # The floor warning is loud wherever it fires: too little market is too little
+            # market, and nothing about the command asking makes that expected.
             out.append(
-                f"!! LOW CONFIDENCE: this window is {self.years:.1f} years, under the "
+                f"{LOUD} LOW CONFIDENCE: this window is {self.years:.1f} years, under the "
                 f"{self.floor:g}-year floor. A ranking over that little market is mostly "
                 "noise - it is still shown, because a loud ranking beats none, but read it "
                 "as a hint and not as evidence."
             )
+            indent = len(LOUD) + 1
         if self.escape_years is not None and self.low_confidence:
             reach = self.previous_fall
             where = (
@@ -1550,8 +1573,9 @@ class WindowEvidence:
                 if reach is not None
                 else "an older fall"
             )
+            # Indented to sit under the notice it belongs to, whichever marker that carried.
             out.append(
-                f"   To rank over a window that reaches {where} instead, pass "
+                f"{' ' * indent}To rank over a window that reaches {where} instead, pass "
                 f"{escape_flag} {self.escape_years}. Fewer funds will have that much "
                 "history; the report will say how many."
             )

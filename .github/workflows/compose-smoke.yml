@@ -306,7 +306,7 @@ jobs:
           grep -q "the longest stretch EVERY eligible fund covers" mf_calm.txt
           grep -q "NONE of those fall inside the shared window" mf_calm.txt
           # S6e: the shared signal fires on a window with no fall, and points the way out.
-          grep -q "NO FALL IN THIS WINDOW" mf_calm.txt
+          grep -q "!! NO FALL IN THIS WINDOW" mf_calm.txt
           grep -q "The default window is anchored on one." mf_calm.txt
           grep -q "pass --common-years" mf_calm.txt
           # A window under the three-year floor is called low confidence and still ranked.
@@ -323,8 +323,11 @@ jobs:
           grep -q "annualised (XIRR)" mf_sip.txt
           grep -q "NON-OVERLAPPING" mf_sip.txt
           grep -q "not investment advice" mf_sip.txt
-          # S6e: sip gets the same signal, worded for a command with no anchored default.
-          grep -q "NO FALL IN THIS WINDOW" mf_sip.txt
+          # S6e/S6f: sip gets the same signal, worded for a command with no anchored
+          # default - and at the calm volume, because a horizon holding no fall is the
+          # expected state there rather than a surprise.
+          grep -q "note: no fall in this window" mf_sip.txt
+          ! grep -q "!! NO FALL" mf_sip.txt
           grep -q "pass --min-history" mf_sip.txt
           ! grep -q "The default window is anchored on one." mf_sip.txt
           uv run python -m market_intel.mf keep-or-exit --fund 9100001 --invested 100000             --current 80000 --horizon-years 3 | tee mf_keep.txt
