@@ -1362,6 +1362,24 @@ A window is low confidence for either of two reasons, and they are not the same 
 Either way the ranking is still shown. A loud ranking beats none, and refusing would invent a
 new failure mode on top of the one being warned about.
 
+**How hard each one knocks depends on how surprising it is (S6e extended in S6f).** A plan
+measured over its own horizon will hold no fall most of the time, so shouting about it on
+every run teaches the owner to skip the shouting - and the next notice that matters goes with
+it. Walking away from a fall-anchored default that was there for the asking is genuinely
+unusual. Same fact, two volumes:
+
+| Where | Volume |
+|---|---|
+| `mf sip` over its horizon, no fall in it | `note:` - expected, so it informs |
+| `mf lumpsum` with `--allow-calm-window`, no fall in it | `!!` - a safe default was left behind on purpose |
+| the anchored default tried and found no fall anywhere | `!!` - always a surprise |
+| under the three-year floor, anywhere | `!!` - too little market is too little market |
+
+The words after the marker are byte-identical between the two volumes: they come from one
+shared constant, so the two cannot drift apart, and the escape hint is the same sentence
+indented to sit under whichever notice it belongs to. This is about how hard the report
+knocks, never about what it says.
+
 Two things differ between the commands, and both are arguments rather than branches:
 
 - whether there is a fall-anchored default to point the owner back to (`mf lumpsum` has one,

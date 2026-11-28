@@ -217,6 +217,10 @@ Decision 2026-11-22:
   in a downturn rather than ranked or dropped. `--common-years N` and `--allow-calm-window`
   remain as deliberate escapes, and a reference with no decline in it falls back to the longest
   shared window with a loud notice rather than failing. Nothing stored, no migration.
+- S6f (done): the no-fall notice takes its volume from how surprising the state is - a calm
+  `note:` where no fall is expected (a plan over its own horizon), a loud `!!` where a
+  fall-anchored default was left behind on purpose. Same words, one shared constant; the
+  three-year floor warning stays loud everywhere.
 - S6e (done): one downturn-evidence signal shared by `mf lumpsum` and `mf sip`. A window is
   flagged when it holds no decline of 20% or more, and separately when it is under the
   three-year confidence floor; either way the ranking is still shown, never refused, and the

@@ -680,12 +680,15 @@ that notice as "who climbed fastest", nothing more.
 
 Both `mf lumpsum` and `mf sip` print the same two signals, from the same code:
 
-- `!! NO FALL IN THIS WINDOW` - the window holds no decline of 20% or more, so the ranking
-  says who climbed fastest and nothing about who holds up in a fall. `mf sip` shows this
-  often, because its window is the horizon asked for and a five-year horizon currently
-  reaches back only to 2021.
+- **no fall in this window** - it holds no decline of 20% or more, so the ranking says who
+  climbed fastest and nothing about who holds up in a fall. The wording is the same wherever
+  it appears; the volume is not. On `mf sip` it reads `note:`, because a horizon holding no
+  fall is the ordinary state there - a five-year horizon currently reaches back only to 2021.
+  On `mf lumpsum` it reads `!!`, because getting it there means `--allow-calm-window` was
+  passed and the safe default was left behind on purpose.
 - `!! LOW CONFIDENCE` - the window is under three years, which is too little market to rank
-  over. It is still ranked; read it as a hint, not as evidence.
+  over. Always loud, on either command: too little market is too little market. It is still
+  ranked; read it as a hint, not as evidence.
 
 Either warning is followed by the number that reaches the next fall further back - `pass
 --common-years 7` on the ranking, `pass --min-history 7` on the plan. Those numbers are
