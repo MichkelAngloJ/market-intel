@@ -349,8 +349,21 @@ def measure_everything(
     )
 
 
-def window_lines(window: mf.CommonWindow, measured: int) -> list[str]:
-    """What the shared window is, how it was chosen, and who it cost."""
+def window_lines(
+    window: mf.CommonWindow,
+    measured: int,
+    falls: Sequence[mf.Episode] = (),
+    *,
+    default_is_anchored: bool = True,
+    escape_flag: str = "--common-years",
+) -> list[str]:
+    """What the shared window is, how it was chosen, what it cost and what it cannot show.
+
+    The warnings come from :func:`mf.window_evidence`, which both ranking commands share, so
+    neither can grow a notice the other lacks. Only two things differ between them and both
+    are arguments: whether there is a fall-anchored default to point back to, and which flag
+    reaches further back.
+    """
     if not window.ok:
         asked = f"the last {window.asked_years} years" if window.asked_years else "any window"
         return [
@@ -370,18 +383,12 @@ def window_lines(window: mf.CommonWindow, measured: int) -> list[str]:
         f"Shared window: {window.start} to {window.end} ({window.years:.1f} years) - {how}.",
         f"  {window.funds:,} of the {measured:,} funds measured are ranked over it.",
     ]
-    if window.no_fall_reason:
-        out.append(
-            f"  !! NO FALL IN THE WINDOW: {window.no_fall_reason}. This ranking is over a "
-            "market that only rose, so it says who climbed fastest and NOTHING about who "
-            "holds up in a decline. Read it that way."
+    out.extend(
+        f"  {line}"
+        for line in mf.window_evidence(window, falls).warnings(
+            default_is_anchored=default_is_anchored, escape_flag=escape_flag
         )
-    elif window.asked_years and window.fall is None:
-        out.append(
-            "  !! The window you asked for contains no decline of "
-            f"{mf.REFERENCE_FALL:.0%} or more, so it says who climbed fastest and nothing "
-            "about who holds up in a fall. The default window would have one."
-        )
+    )
     short = measured - window.funds - window.stale - window.too_short
     if short > 0:
         out.append(
@@ -506,7 +513,7 @@ def run_lumpsum(settings, args: argparse.Namespace) -> int:
         + (f", {args.plan} plans only" if plan else ", every plan")
     )
     print(f"{len(got.full):,} funds measured in {got.seconds:.1f} s.")
-    print("\n".join(window_lines(got.window, len(got.full))))
+    print("\n".join(window_lines(got.window, len(got.full), got.falls)))
     if not got.window.ok:
         print("\n".join(history_note() + report_footer()))
         return 0
@@ -615,7 +622,17 @@ def run_sip(settings, args: argparse.Namespace) -> int:
         print("No NAV history held yet. Run `mf fetch`.", file=sys.stderr)
         return 1
     print(f"{len(got.full):,} funds measured in {got.seconds:.1f} s.")
-    print("\n".join(window_lines(got.window, len(got.full))))
+    print(
+        "\n".join(
+            window_lines(
+                got.window,
+                len(got.full),
+                got.falls,
+                default_is_anchored=False,
+                escape_flag="--min-history",
+            )
+        )
+    )
     if not got.window.ok:
         print(
             f"\nSo there is no window in which a {args.years}-year plan can be shown. A "

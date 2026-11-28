@@ -1462,6 +1462,129 @@ def rank_common(stats: Sequence[FundStats]) -> list[Ranked]:
     return rank_on(stats, COMMON_MEASURES, common_measures)
 
 
+# --- how much downturn evidence a window holds (S6e) --------------------------------------
+# S6d grew two separate warnings - one for a window with no fall in it, one for the loud
+# fallback - and `mf sip` printed the first of them only because it happened to share the
+# helper, with a closing clause ("the default window would have one") that is true of
+# `mf lumpsum` and false of `mf sip`. Both commands now ask ONE object what their window can
+# and cannot show, and print what it answers. There is no second place for the two to drift.
+#
+# A window is low confidence for either of two reasons, and they are different:
+#   - it holds no decline, so it says who climbed fastest and nothing about who holds up;
+#   - it is shorter than the floor below which a ranking is mostly noise.
+CONFIDENCE_FLOOR_YEARS = MIN_SHOW_YEARS
+
+
+def _years_back_to(end: date, target: date) -> int:
+    """The smallest whole N for which ``end`` minus N years is on or before ``target``.
+
+    This is what a ``--common-years N`` has to be to reach back to a given day, and it is
+    computed by stepping rather than dividing because the window itself is built with
+    calendar arithmetic: a leap year makes a division-based answer land a day short.
+    """
+    n = max(1, int((end - target).days // 365))
+    while _add_years(end, -n) > target:
+        n += 1
+    return n
+
+
+@dataclass(frozen=True, slots=True)
+class WindowEvidence:
+    """What one window can and cannot show. The single signal both commands print from."""
+
+    years: float
+    floor: float
+    fall: Episode | None = None
+    previous_fall: Episode | None = None
+    escape_years: int | None = None
+    no_fall_reason: str | None = None
+
+    @property
+    def holds_fall(self) -> bool:
+        return self.fall is not None
+
+    @property
+    def below_floor(self) -> bool:
+        return self.years < self.floor
+
+    @property
+    def low_confidence(self) -> bool:
+        return self.below_floor or not self.holds_fall
+
+    def warnings(
+        self, *, default_is_anchored: bool = True, escape_flag: str = "--common-years"
+    ) -> list[str]:
+        """The lines to print. Empty when the window holds a fall and clears the floor.
+
+        ``default_is_anchored`` is the one thing the two commands genuinely differ on:
+        `mf lumpsum` has a fall-anchored default to point the owner back to, `mf sip` does
+        not, because a plan has to be measured over the span it will actually run for.
+        """
+        out: list[str] = []
+        if self.no_fall_reason:
+            out.append(
+                f"!! NO FALL IN THE WINDOW: {self.no_fall_reason}. This ranking is over a "
+                "market that only rose, so it says who climbed fastest and NOTHING about "
+                "who holds up in a decline. Read it that way."
+            )
+        elif not self.holds_fall:
+            line = (
+                f"!! NO FALL IN THIS WINDOW: it contains no decline of {REFERENCE_FALL:.0%} "
+                "or more, so it says who climbed fastest and nothing about who holds up in "
+                "a fall."
+            )
+            if default_is_anchored:
+                line += " The default window is anchored on one."
+            out.append(line)
+        if self.below_floor:
+            out.append(
+                f"!! LOW CONFIDENCE: this window is {self.years:.1f} years, under the "
+                f"{self.floor:g}-year floor. A ranking over that little market is mostly "
+                "noise - it is still shown, because a loud ranking beats none, but read it "
+                "as a hint and not as evidence."
+            )
+        if self.escape_years is not None and self.low_confidence:
+            reach = self.previous_fall
+            where = (
+                f"the {reach.depth:.0%} fall of {reach.peak_date}"
+                if reach is not None
+                else "an older fall"
+            )
+            out.append(
+                f"   To rank over a window that reaches {where} instead, pass "
+                f"{escape_flag} {self.escape_years}. Fewer funds will have that much "
+                "history; the report will say how many."
+            )
+        return out
+
+
+def window_evidence(
+    window: CommonWindow,
+    falls: Sequence[Episode] = (),
+    *,
+    floor: float = CONFIDENCE_FLOOR_YEARS,
+) -> WindowEvidence:
+    """Assess one window: does it hold a decline, is it long enough, and what reaches further.
+
+    ``escape_years`` is the ``--common-years`` (or ``--min-history``) value that would reach
+    the next qualifying fall further back - named rather than taken, so the owner chooses a
+    smaller, older field knowingly instead of having it chosen for them.
+    """
+    if window.end is None:
+        return WindowEvidence(years=0.0, floor=floor, no_fall_reason=window.no_fall_reason)
+    earlier = [f for f in falls if window.fall is None or f.peak_date < window.fall.peak_date]
+    previous = max(earlier, key=lambda f: f.peak_date) if earlier else None
+    escape = _years_back_to(window.end, previous.peak_date) if previous is not None else None
+    return WindowEvidence(
+        years=window.years,
+        floor=floor,
+        fall=window.fall,
+        previous_fall=previous,
+        escape_years=escape,
+        no_fall_reason=window.no_fall_reason,
+    )
+
+
 # --- has this fund ever been through a fall? ----------------------------------------------
 class Reference:
     """An equal-weighted, daily-rebalanced index of a category, built from the funds held.
