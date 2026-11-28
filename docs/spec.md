@@ -217,6 +217,12 @@ Decision 2026-11-22:
   in a downturn rather than ranked or dropped. `--common-years N` and `--allow-calm-window`
   remain as deliberate escapes, and a reference with no decline in it falls back to the longest
   shared window with a loud notice rather than failing. Nothing stored, no migration.
+- S6e (done): one downturn-evidence signal shared by `mf lumpsum` and `mf sip`. A window is
+  flagged when it holds no decline of 20% or more, and separately when it is under the
+  three-year confidence floor; either way the ranking is still shown, never refused, and the
+  warning names the `--common-years` or `--min-history` number that reaches the next fall
+  further back. `mf sip` keeps the horizon window on purpose - a SIP buys through a fall, so
+  anchoring it to one would answer the wrong question. Nothing stored, no migration.
 - HONESTY (SEBI): evidence only. No predicted returns, no profit or accuracy claims, no
   promise that a fall will be recovered. Every statistics output carries "Past performance is
   not indicative of future results; information, not investment advice" and the survivorship

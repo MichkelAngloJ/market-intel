@@ -676,6 +676,25 @@ says nothing about holding up in one. Both print which window was used and why.
 shared window and prints a loud `!! NO FALL IN THE WINDOW` notice. Read any ranking carrying
 that notice as "who climbed fastest", nothing more.
 
+### The two warnings to read before any ranking (S6e)
+
+Both `mf lumpsum` and `mf sip` print the same two signals, from the same code:
+
+- `!! NO FALL IN THIS WINDOW` - the window holds no decline of 20% or more, so the ranking
+  says who climbed fastest and nothing about who holds up in a fall. `mf sip` shows this
+  often, because its window is the horizon asked for and a five-year horizon currently
+  reaches back only to 2021.
+- `!! LOW CONFIDENCE` - the window is under three years, which is too little market to rank
+  over. It is still ranked; read it as a hint, not as evidence.
+
+Either warning is followed by the number that reaches the next fall further back - `pass
+--common-years 7` on the ranking, `pass --min-history 7` on the plan. Those numbers are
+calculated to actually reach it. Fewer funds will have that much history and the report says
+how many, which is the trade being offered: a smaller, older field for a window that contains
+a real decline.
+
+Nothing switches by itself. If you want the older window you ask for it.
+
 **The flag beside each fund.** `SURVIVED A FALL` means the fund was already reporting when a
 broad reference peaked and still reporting at the bottom. `UNTESTED IN A DOWNTURN` means there
 is no such decline anywhere in its history: not a fault, not a prediction, just a record that

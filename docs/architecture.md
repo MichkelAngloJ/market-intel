@@ -1338,8 +1338,49 @@ has, the ranking does NOT fail or return nothing. It falls back to the longest s
 and prints a loud notice saying the ranking is over a market that only rose and says nothing
 about who holds up in a decline.
 
-`mf sip` is unchanged: its window is the horizon the owner asked for, so there is nothing to
-anchor - a plan has to be measured over the span it will actually run for.
+`mf sip` is NOT fall-anchored, and that is deliberate rather than an omission. A lumpsum puts
+the whole amount in at one instant, so surviving a decline is the entire risk; a SIP drips in
+across every condition and buys more units when the NAV is low, so anchoring its window to a
+crash would answer a question nobody asked. Its window is the horizon the owner asked for,
+because a plan has to be measured over the span it will actually run for.
+
+### One signal for how much a window can show (S6e)
+
+S6d left two warnings in two places, and `mf sip` printed one of them only because it happened
+to share a helper - closing with "the default window would have one", which is true of
+`mf lumpsum` and false of `mf sip`. Both commands now ask ONE object, `WindowEvidence`, what
+their window can and cannot show, and print what it answers. There is no second place for the
+two to drift apart.
+
+A window is low confidence for either of two reasons, and they are not the same reason:
+
+| Signal | What it means | What is printed |
+|---|---|---|
+| no fall in it | the window holds no decline of 20% or more | it says who climbed fastest and nothing about who holds up in a fall |
+| under the floor | shorter than `MIN_SHOW_YEARS` (3 years) | a ranking over that little market is mostly noise |
+
+Either way the ranking is still shown. A loud ranking beats none, and refusing would invent a
+new failure mode on top of the one being warned about.
+
+Two things differ between the commands, and both are arguments rather than branches:
+
+- whether there is a fall-anchored default to point the owner back to (`mf lumpsum` has one,
+  `mf sip` does not);
+- which flag reaches further back - `--common-years` for the ranking, `--min-history` for the
+  plan.
+
+The warning NAMES the number that would reach the next qualifying fall further back, computed
+by stepping through calendar years rather than dividing, because a number that lands a day
+short sends the owner round in a circle. Nothing auto-switches to an older fall: the owner
+chooses a smaller, older field knowingly, which is the point of printing the number instead of
+taking it.
+
+**What the floor is actually worth.** On the fall-anchored path it is a belt on braces. A fund
+is only eligible with five years of NAV ending now, so the window cannot come out shorter than
+about that however recent the anchoring fall is - a fall two months old still gives a 5.0-year
+window. The floor fires on a window the OWNER names (`--common-years 2`), and would fire on
+the anchored one if the five-year rule ever moved.
+
 
 
 ## Models, evaluation, costs and the registry
