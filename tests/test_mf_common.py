@@ -646,3 +646,168 @@ def Measured_for(funds, untested=(2,)):
         seconds=0.0,
         untested=untested,
     )
+
+
+# --- one downturn-evidence signal, shared by both commands (S6e) ----------------------------
+def evidence_for(
+    start: date, end: date = END, *, fall: mf.Episode | None = None, falls=(), reason=None
+) -> mf.WindowEvidence:
+    window = mf.CommonWindow(start=start, end=end, funds=10, fall=fall, no_fall_reason=reason)
+    return mf.window_evidence(window, falls)
+
+
+def test_a_window_holding_a_fall_and_clearing_the_floor_warns_about_nothing():
+    evidence = evidence_for(date(2020, 1, 3), fall=CRASH, falls=[OLDER_CRASH, CRASH])
+    assert evidence.holds_fall
+    assert not evidence.below_floor
+    assert not evidence.low_confidence
+    assert evidence.warnings() == []
+
+
+def test_a_window_with_no_fall_says_what_it_can_and_cannot_show():
+    evidence = evidence_for(date(2021, 11, 25), falls=[CRASH])
+    assert not evidence.holds_fall
+    assert evidence.low_confidence
+    text = " ".join(evidence.warnings())
+    assert "NO FALL IN THIS WINDOW" in text
+    assert "contains no decline" in text
+    assert "who climbed fastest" in text
+
+
+def test_the_anchored_default_clause_is_printed_for_lumpsum_and_not_for_sip():
+    """The one thing the two commands genuinely differ on."""
+    evidence = evidence_for(date(2021, 11, 25), falls=[CRASH])
+    lumpsum = " ".join(evidence.warnings(default_is_anchored=True))
+    sip = " ".join(evidence.warnings(default_is_anchored=False))
+
+    assert "The default window is anchored on one." in lumpsum
+    assert "default window" not in sip
+    # Everything else about the two is word for word the same.
+    assert sip.split("  ")[0] in lumpsum
+
+
+def test_each_command_is_told_which_flag_reaches_further_back():
+    evidence = evidence_for(date(2021, 11, 25), falls=[CRASH])
+    assert "--common-years 7" in " ".join(evidence.warnings())
+    assert "--min-history 7" in " ".join(
+        evidence.warnings(default_is_anchored=False, escape_flag="--min-history")
+    )
+
+
+def test_a_window_under_the_floor_is_called_low_confidence_and_still_ranked():
+    evidence = evidence_for(date(2024, 11, 25), fall=CRASH, falls=[CRASH])
+    assert evidence.below_floor
+    assert evidence.floor == mf.MIN_SHOW_YEARS == 3.0
+    text = " ".join(evidence.warnings())
+    assert "LOW CONFIDENCE" in text
+    assert "2.0 years" in text
+    assert "still shown" in text, "the guard warns, it never refuses"
+
+
+def test_the_floor_is_the_minimum_history_rule_rather_than_a_new_number():
+    assert mf.CONFIDENCE_FLOOR_YEARS == mf.MIN_SHOW_YEARS
+
+
+def test_a_window_exactly_on_the_floor_is_not_under_it():
+    on_it = mf.WindowEvidence(years=3.0, floor=3.0, fall=CRASH)
+    under = mf.WindowEvidence(years=2.99, floor=3.0, fall=CRASH)
+    assert not on_it.below_floor
+    assert under.below_floor
+
+
+def test_a_short_window_that_does_hold_a_fall_warns_only_about_its_length():
+    evidence = evidence_for(date(2024, 11, 25), fall=CRASH, falls=[CRASH])
+    text = " ".join(evidence.warnings())
+    assert "LOW CONFIDENCE" in text
+    assert "NO FALL IN THIS WINDOW" not in text
+
+
+def test_the_escape_names_the_fall_before_the_one_the_window_is_anchored_on():
+    evidence = evidence_for(date(2020, 1, 3), fall=CRASH, falls=[OLDER_CRASH, CRASH])
+    assert evidence.previous_fall is OLDER_CRASH
+    # 2011-01-04 is just under sixteen years before 2026-11-25.
+    assert evidence.escape_years == 16
+
+
+def test_the_escape_year_count_really_does_reach_that_fall():
+    """A number that lands a day short would send the owner round in a circle."""
+    evidence = evidence_for(date(2020, 1, 3), fall=CRASH, falls=[OLDER_CRASH, CRASH])
+    assert evidence.escape_years is not None
+    reached = mf._add_years(END, -evidence.escape_years)
+    assert reached <= OLDER_CRASH.peak_date
+    # And it is the SMALLEST such number: one year less must fall short.
+    assert mf._add_years(END, -(evidence.escape_years - 1)) > OLDER_CRASH.peak_date
+
+
+def test_no_older_fall_means_no_escape_is_offered_rather_than_a_wrong_one():
+    evidence = evidence_for(date(2020, 1, 3), fall=CRASH, falls=[CRASH])
+    assert evidence.previous_fall is None
+    assert evidence.escape_years is None
+    assert not any("pass" in line for line in evidence.warnings())
+
+
+def test_the_escape_is_not_offered_when_the_window_is_already_sound():
+    evidence = evidence_for(date(2020, 1, 3), fall=CRASH, falls=[OLDER_CRASH, CRASH])
+    assert evidence.escape_years == 16  # it is known...
+    assert evidence.warnings() == []  # ...but there is nothing to escape from
+
+
+def test_the_loud_fallback_notice_survives_the_move_into_the_shared_signal():
+    evidence = evidence_for(
+        date(2015, 1, 1), reason="no decline of 20% or more exists anywhere in the reference"
+    )
+    text = " ".join(evidence.warnings())
+    assert "!! NO FALL IN THE WINDOW" in text
+    assert "only rose" in text
+    assert "NOTHING about who holds up in a decline" in text
+    assert "NO FALL IN THIS WINDOW" not in text, "the two notices must not both fire"
+
+
+def test_a_window_that_could_not_be_built_still_answers_without_raising():
+    evidence = mf.window_evidence(mf.CommonWindow(None, None), [CRASH])
+    assert evidence.years == 0.0
+    assert not evidence.holds_fall
+
+
+def test_both_commands_print_the_signal_through_the_same_report_helper():
+    window = mf.CommonWindow(start=date(2021, 11, 25), end=END, funds=47, asked_years=5)
+    lumpsum = "\n".join(mf_cli.window_lines(window, 370, [CRASH]))
+    sip = "\n".join(
+        mf_cli.window_lines(
+            window, 370, [CRASH], default_is_anchored=False, escape_flag="--min-history"
+        )
+    )
+    assert "NO FALL IN THIS WINDOW" in lumpsum and "NO FALL IN THIS WINDOW" in sip
+    assert "--common-years 7" in lumpsum
+    assert "--min-history 7" in sip
+    assert "The default window is anchored on one." in lumpsum
+    assert "default window" not in sip
+
+
+def test_a_recent_fall_shortens_the_window_but_the_five_year_rule_floors_it():
+    """The collapse the guard exists for cannot happen while ranking needs five years.
+
+    A fall two months ago admits almost every fund, which pushes the window's start to the
+    newest eligible fund - but a fund is only eligible with five years of NAV ending now, so
+    the window cannot come out shorter than that. The guard is a belt on braces: it fires on
+    a window the owner names, and would fire here too if the five-year rule ever moved.
+    """
+    just_now = a_fall(date(2026, 9, 1), date(2026, 10, 15), depth=0.30)
+    spans = [span(1, date(2011, 1, 1), END), span(2, date(2021, 11, 20), END)]
+
+    window, covering = mf.common_window(spans, falls=[just_now])
+    assert covering == [1, 2]
+    assert window.holds(just_now)
+    assert window.years == pytest.approx(5.01, abs=0.02)
+    assert not mf.window_evidence(window, [just_now]).below_floor
+
+    # Drop the eligibility rule and the same fall really does collapse the window.
+    collapsed, _ = mf.common_window(
+        [span(1, date(2011, 1, 1), END), span(3, date(2025, 1, 1), END)],
+        falls=[just_now],
+        min_years=1.0,
+    )
+    assert collapsed.years < mf.CONFIDENCE_FLOOR_YEARS
+    evidence = mf.window_evidence(collapsed, [just_now])
+    assert evidence.below_floor
+    assert "LOW CONFIDENCE" in " ".join(evidence.warnings())

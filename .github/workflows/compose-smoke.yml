@@ -305,6 +305,15 @@ jobs:
           uv run python -m market_intel.mf lumpsum --amount 100000 --risk high             --allow-calm-window | tee mf_calm.txt
           grep -q "the longest stretch EVERY eligible fund covers" mf_calm.txt
           grep -q "NONE of those fall inside the shared window" mf_calm.txt
+          # S6e: the shared signal fires on a window with no fall, and points the way out.
+          grep -q "NO FALL IN THIS WINDOW" mf_calm.txt
+          grep -q "The default window is anchored on one." mf_calm.txt
+          grep -q "pass --common-years" mf_calm.txt
+          # A window under the three-year floor is called low confidence and still ranked.
+          uv run python -m market_intel.mf lumpsum --amount 100000 --risk high             --common-years 2 | tee mf_short.txt
+          grep -q "LOW CONFIDENCE" mf_short.txt
+          grep -q "still shown" mf_short.txt
+          grep -q "Ranked over the shared window" mf_short.txt
           # A named window is honoured whatever it holds.
           uv run python -m market_intel.mf lumpsum --amount 100000 --risk high             --common-years 8 | tee mf_lump8.txt
           grep -q "the last 8 years, as asked" mf_lump8.txt
@@ -314,6 +323,10 @@ jobs:
           grep -q "annualised (XIRR)" mf_sip.txt
           grep -q "NON-OVERLAPPING" mf_sip.txt
           grep -q "not investment advice" mf_sip.txt
+          # S6e: sip gets the same signal, worded for a command with no anchored default.
+          grep -q "NO FALL IN THIS WINDOW" mf_sip.txt
+          grep -q "pass --min-history" mf_sip.txt
+          ! grep -q "The default window is anchored on one." mf_sip.txt
           uv run python -m market_intel.mf keep-or-exit --fund 9100001 --invested 100000             --current 80000 --horizon-years 3 | tee mf_keep.txt
           grep -q "Keep or exit" mf_keep.txt
           grep -q "days to get back" mf_keep.txt
