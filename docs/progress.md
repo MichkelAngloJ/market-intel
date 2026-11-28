@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-27, HEAD 0860459. Updated at the end of every task (see
+Last updated: 2026-11-28, HEAD c2f3afe. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -20,8 +20,8 @@ Last updated: 2026-11-27, HEAD 0860459. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S6e (one downturn-evidence signal, shared by lumpsum and sip) in progress. S6d is
-  done and awaiting planner review; S6a, S6b and S6c reviews all PASSED (planner,
+- Now: S6e (one downturn-evidence signal, shared by lumpsum and sip) done, awaiting
+  planner review, together with S6d. S6a, S6b and S6c reviews all PASSED (planner,
   2026-11-27). 0.11 (remove the testing-laptop
   dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
@@ -210,6 +210,7 @@ Last updated: 2026-11-27, HEAD 0860459. Updated at the end of every task (see
 | S6b | done 2026-11-27 (HEAD 17f4d2d) | awaiting planner review | Mutual funds, the decision half, offline and storing nothing. `mf lumpsum` (a ranking on three historical measures at once, inside a measured risk band), `mf sip` (a split across fund houses with each scheme's minimum, and the best/median/worst of that exact plan over every rolling window, with a plain stop rule) and `mf keep-or-exit` (what this fund and its whole category did after falls of the same depth, against the owner's horizon). The minimum-history rule - rank at 5 years, flag 3 to 5, refuse under 3 - is shared by all three and printed on every output. No migration |
 | S6c | done 2026-11-27 (HEAD 02d1fe9) | awaiting planner review | The lumpsum ranking made comparable. The headline rank is computed over ONE window every ranked fund covers (`--common-years` demands a longer one; stale funds are dropped first so a dead fund cannot drag its end back). Each fund carries a survived-a-fall or untested-in-a-downturn flag, measured against a broad reference built from the sixty longest-lived funds held, which finds the 2011 and 2020 declines. Every spread is reported over non-overlapping windows as well as overlapping ones. No migration, nothing stored |
 | S6d | done 2026-11-27 (HEAD 0860459) | awaiting planner review | The DEFAULT lumpsum window now has to contain a real fall. It is anchored on the most recent decline of 20% or more in the market reference (the 37% fall of 2020) and stretched back as far as every ranked fund allows: 2020-01-03 to 2026-11-25, 387 funds ranked. The 75 funds that were not reporting through it are NAMED as untested in a downturn, not dropped. `--common-years N` (now warning when the window asked for holds no fall) and `--allow-calm-window` remain as deliberate escapes, and a reference with no decline falls back to the longest shared window with a loud notice rather than failing. No migration, nothing stored |
+| S6e | done 2026-11-28 (HEAD c2f3afe) | awaiting planner review | One downturn-evidence signal both ranking commands print from, so neither can grow a notice the other lacks. A window is flagged when it holds no decline of 20% or more, and separately when it is under the three-year floor; either way it is still ranked, never refused, and the warning names the `--common-years` (ranking) or `--min-history` (plan) number that reaches the next fall further back. `mf sip` keeps the horizon window on purpose. No migration, nothing stored |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -230,6 +231,10 @@ Last updated: 2026-11-27, HEAD 0860459. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S6e (2026-11-28): local databases unchanged, still at 0011. The default `mf lumpsum`
+  window holds the 2020 fall and clears the floor, so it prints no warning. A five-year
+  `mf sip` horizon reaches back only to 2021 and so prints the no-fall warning with
+  `pass --min-history 7`; that 7 was checked to really produce a window holding the fall.
 - S6d (2026-11-27): local databases unchanged, still at 0011. The default `mf lumpsum`
   window is 2020-01-03 to 2026-11-25 (6.9 years), anchored on the 2020 fall: of 1,128
   Direct-plan funds, 387 are ranked, 75 have the five years but were not there for the fall,
@@ -435,9 +440,17 @@ Last updated: 2026-11-27, HEAD 0860459. Updated at the end of every task (see
   years" rule would drift away from 2020 as time passes and silently become calm again; the
   rule re-reads the reference every run, so when a new decline happens the window moves to it
   on its own. Anything built on the ranking should print which window it used.
-- `mf sip` is deliberately NOT fall-anchored: its window is the horizon the owner asked for,
-  because a plan has to be measured over the span it will actually run for. That means a
-  short-horizon SIP can still be chosen over a rising-only market, which is a real gap.
+- The three-year confidence floor cannot be breached by the fall-anchored window. A fund
+  is only eligible with five years of NAV ending now, so the window is at least about five
+  years however recent the anchoring fall is: a fall two months old still gives 5.0 years.
+  The guard is real where the OWNER names a short window (`--common-years 2`), and would
+  cover the anchored path too if the five-year rule ever moved. The worry recorded after S6d
+  - that a 2027 crash would give a one-year window - was wrong about the magnitude.
+- `mf sip` is deliberately NOT fall-anchored: a lumpsum takes the whole sequence-of-returns
+  risk at one instant, while a SIP drips in and buys more units when the NAV is low, so
+  anchoring its window to a crash would answer the wrong question. Its window is the horizon
+  asked for. S6e closed the gap that left: a horizon holding no fall now says so loudly and
+  names the `--min-history` number that would reach one.
 - The CALM window (`--allow-calm-window`, and the S6c default until S6d replaced it)
   contains no market decline. It is the longest stretch EVERY eligible fund covers, so the
   most recently launched eligible fund sets it, and on the data held that is about five years
