@@ -450,3 +450,16 @@
   "10 years" would drift, so the rule is driven by the fall itself.
 - Reason (owner): I want the default ranking safe for real money - compared over a period that
   actually includes a fall, not just a rising market.
+
+## 2026-11-28 - Notice volumes
+- Decision: The project has two notice volumes: `!!` for surprising states that warrant a
+  look, and `note:` (constant `mf.CALM`) for expected context that is true but unremarkable.
+  Any future calm notice reuses `mf.CALM`; do not introduce new calm prefixes (`info:`,
+  `fyi:`, ...). Locked now while it is a single constant, to keep notices from fragmenting.
+
+## 2026-11-28 - No session-level dedup for the no-fall notice
+- Decision: The no-fall `note:` fires per command invocation, not once per session. We will
+  not build cross-run/session deduplication for it. The loud->calm downgrade (S6f) already
+  removed the alarm-fatigue; session-state would be a new mechanism with new failure modes
+  for marginal benefit. The per-path calm `note:` is the accepted resting state until the
+  next >= 20% fall clears it naturally.
