@@ -20,8 +20,9 @@ Last updated: 2026-11-27, HEAD 0860459. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S6d (default the lumpsum ranking to a window that contains a real fall) done,
-  awaiting planner review. S6a, S6b and S6c reviews all PASSED (planner, 2026-11-27). 0.11 (remove the testing-laptop
+- Now: S6e (one downturn-evidence signal, shared by lumpsum and sip) in progress. S6d is
+  done and awaiting planner review; S6a, S6b and S6c reviews all PASSED (planner,
+  2026-11-27). 0.11 (remove the testing-laptop
   dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
   groundwork; 1.1 instruments and watchlist; 1.2 news feeds; 1.2b per-company news (Google
