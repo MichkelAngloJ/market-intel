@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-11-28, HEAD c2f3afe. Updated at the end of every task (see
+Last updated: 2026-11-28, HEAD 7b53878. Updated at the end of every task (see
 [CLAUDE.md](../CLAUDE.md)).
 
 ## Current
@@ -20,8 +20,8 @@ Last updated: 2026-11-28, HEAD c2f3afe. Updated at the end of every task (see
   (AMFI NAV, ranking, "how sure" history stats, split calculator with minimums, keep/exit
   flags); S7 dashboard + scheduler + end-to-end test + daily stock predictions/audit/paper
   trading. Every module takes the owner's capital amount (a shared sizing component, S5i).
-- Now: S6e (one downturn-evidence signal, shared by lumpsum and sip) done, awaiting
-  planner review, together with S6d. S6a, S6b and S6c reviews all PASSED (planner,
+- Now: S6f (severity-by-surprise for the no-fall warning) done, awaiting planner review,
+  together with S6d and S6e. S6a, S6b and S6c reviews all PASSED (planner,
   2026-11-27). 0.11 (remove the testing-laptop
   dependency) stays planned for not before 2026-12-03.
 - Phase 1 plan (owner-confirmed 2026-11-21, updated 2026-11-22; one session per task): 1.0
@@ -211,6 +211,7 @@ Last updated: 2026-11-28, HEAD c2f3afe. Updated at the end of every task (see
 | S6c | done 2026-11-27 (HEAD 02d1fe9) | awaiting planner review | The lumpsum ranking made comparable. The headline rank is computed over ONE window every ranked fund covers (`--common-years` demands a longer one; stale funds are dropped first so a dead fund cannot drag its end back). Each fund carries a survived-a-fall or untested-in-a-downturn flag, measured against a broad reference built from the sixty longest-lived funds held, which finds the 2011 and 2020 declines. Every spread is reported over non-overlapping windows as well as overlapping ones. No migration, nothing stored |
 | S6d | done 2026-11-27 (HEAD 0860459) | awaiting planner review | The DEFAULT lumpsum window now has to contain a real fall. It is anchored on the most recent decline of 20% or more in the market reference (the 37% fall of 2020) and stretched back as far as every ranked fund allows: 2020-01-03 to 2026-11-25, 387 funds ranked. The 75 funds that were not reporting through it are NAMED as untested in a downturn, not dropped. `--common-years N` (now warning when the window asked for holds no fall) and `--allow-calm-window` remain as deliberate escapes, and a reference with no decline falls back to the longest shared window with a loud notice rather than failing. No migration, nothing stored |
 | S6e | done 2026-11-28 (HEAD c2f3afe) | awaiting planner review | One downturn-evidence signal both ranking commands print from, so neither can grow a notice the other lacks. A window is flagged when it holds no decline of 20% or more, and separately when it is under the three-year floor; either way it is still ranked, never refused, and the warning names the `--common-years` (ranking) or `--min-history` (plan) number that reaches the next fall further back. `mf sip` keeps the horizon window on purpose. No migration, nothing stored |
+| S6f | done 2026-11-28 (HEAD 7b53878) | awaiting planner review | The no-fall notice takes its VOLUME from how surprising the state is, so a warning that fires on nearly every run stops reading as noise. A plan measured over its own horizon gets a calm `note:`; a ranking where a fall-anchored default was left behind on purpose keeps the loud `!!`. The words after the marker come from one shared constant and are byte-identical either way. The three-year floor warning stays loud everywhere. No migration, nothing stored |
 | 1.3 | planned (now part of S1) | – | Upstox login and token |
 | 1.4 | planned | – | Daily candles with gap detection and backfill |
 | 1.5 | planned | – | Intraday candles |
@@ -231,6 +232,9 @@ Last updated: 2026-11-28, HEAD c2f3afe. Updated at the end of every task (see
   taken before manifests existed; it has no manifest and leaves with the 7-per-kind rotation.
 - Testing laptop (`restricted`): unchanged, on the cloud databases (migration 0003, MongoDB
   collections set up).
+- S6f (2026-11-28): local databases unchanged, still at 0011. `mf sip` over a five-year
+  horizon now reads `note: no fall in this window: ...` where it read `!! NO FALL IN THIS
+  WINDOW: ...`; `mf lumpsum --allow-calm-window` still reads `!!`. Same sentence in both.
 - S6e (2026-11-28): local databases unchanged, still at 0011. The default `mf lumpsum`
   window holds the 2020 fall and clears the floor, so it prints no warning. A five-year
   `mf sip` horizon reaches back only to 2021 and so prints the no-fall warning with
@@ -440,6 +444,10 @@ Last updated: 2026-11-28, HEAD c2f3afe. Updated at the end of every task (see
   years" rule would drift away from 2020 as time passes and silently become calm again; the
   rule re-reads the reference every run, so when a new decline happens the window moves to it
   on its own. Anything built on the ranking should print which window it used.
+- A warning that fires on nearly every run is a warning nobody reads. The no-fall notice is
+  the first place this project keys VOLUME to surprise rather than to severity: identical
+  words, `note:` where the state is expected and `!!` where it is not. Anything else that
+  grows an always-on warning should do the same rather than add a flag to silence it.
 - The three-year confidence floor cannot be breached by the fall-anchored window. A fund
   is only eligible with five years of NAV ending now, so the window is at least about five
   years however recent the anchoring fall is: a fall two months old still gives 5.0 years.
